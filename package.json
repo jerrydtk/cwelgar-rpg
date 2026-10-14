@@ -1,0 +1,17 @@
+{
+  "name": "misi",
+  "version": "1.0.0",
+  "description": "Wiedźmińskie RPG na Discorda",
+  "main": "rpg.js",
+  "scripts": {
+    "start": "node rpg.js",
+    "test": "node witcher-rpg.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "discord.js": "^14.26.4"
+  }
+}
