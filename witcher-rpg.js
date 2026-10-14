@@ -9,6 +9,7 @@ const PVP_STARTING_RATING = 1000;
 const PVP_RATING_K_FACTOR = 32;
 const PVP_RANKED_MATCH_COOLDOWN = 2 * HOUR;
 const HERBALISM_COOLDOWN = 30 * MINUTE;
+const HERBALISM_GATHER_DURATION = 15 * MINUTE;
 const HERBALISM_MAX_LEVEL = 5;
 const HERBALISM_XP_PER_HARVEST = 25;
 const HERBALISM_XP_PER_LEVEL = 100;
@@ -425,11 +426,11 @@ const ITEMS = {
 
 const WITCHER_SCHOOLS = [
   { id: 'wilczej_szkoly', name: 'Szkoła Wilka', gearName: 'Wilczej Szkoły', attack: 3, defense: 0, critChance: 0, gearAttack: 0, gearDefense: 0, gearCritChance: 0, bonus: '+3 do obrażeń' },
-  { id: 'gryfa', name: 'Szkoła Gryfa', gearName: 'Szkoły Gryfa', attack: 0, defense: 3, critChance: 0, gearAttack: -1, gearDefense: 2, gearCritChance: 0, bonus: '+3 do obrony' },
+  { id: 'gryfa', name: 'Szkoła Gryfa', gearName: 'Szkoły Gryfa', attack: 1, defense: 2, critChance: 0, gearAttack: 0, gearDefense: 1, gearCritChance: 0, healthRegenBonus: 0.1, bonus: '+1 do ataku, +2 do obrony, +1 do obrony rynsztunku i +0,1 PŻ/min regeneracji' },
   { id: 'niedzwiedzia', name: 'Szkoła Niedźwiedzia', gearName: 'Szkoły Niedźwiedzia', attack: 0, defense: 5, critChance: 0, gearAttack: -3, gearDefense: 6, gearCritChance: -0.01, bonus: '+5 do obrony' },
   { id: 'kota', name: 'Szkoła Kota', gearName: 'Szkoły Kota', attack: 1, defense: 0, critChance: 0.02, gearAttack: 5, gearDefense: -3, gearCritChance: 0.04, bonus: '+1 do obrażeń i +2% szansy na krytyk' },
   { id: 'zmiji', name: 'Szkoła Żmii', gearName: 'Szkoły Żmii', attack: 0.5, defense: 0, critChance: 0.03, gearAttack: 2, gearDefense: -1, gearCritChance: 0.02, bonus: '+0.5 do obrażeń i +3% szansy na krytyk' },
-  { id: 'mantikory', name: 'Szkoła Mantikory', gearName: 'Szkoły Mantikory', attack: 1, defense: 2, critChance: 0.01, gearAttack: 1, gearDefense: 1, gearCritChance: 0.01, bonus: '+1 do obrażeń, +2 do obrony i +1% szansy na krytyk' }
+  { id: 'mantikory', name: 'Szkoła Mantikory', gearName: 'Szkoły Mantikory', attack: 2, defense: 1, critChance: 0, gearAttack: 0, gearDefense: 0, gearCritChance: 0, healingBonus: 0.05, bonus: '+2 do ataku, +1 do obrony i +5% leczenia miksturami' }
 ];
 const GEAR_TIERS = [
   { id: 'podstawowy', name: 'Podstawowy', requiredLevel: 5, price: 650, attack: 18, defense: 14, critChance: 0.12 },
@@ -595,8 +596,32 @@ const ITEM_ALIASES = {
   zbroja_niedzwiedzia: 'zbroja_niedzwiedzia_wysmienity'
 };
 
-function resolveItemId(itemId) {
-  return ITEM_ALIASES[itemId] || itemId;
+function normalizeCatalogInput(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[łŁ]/g, character => character === 'Ł' ? 'L' : 'l')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function resolveCatalogId(input, catalog, aliases = {}) {
+  const normalizedInput = normalizeCatalogInput(input);
+  const alias = Object.entries(aliases)
+    .find(([aliasId]) => normalizeCatalogInput(aliasId) === normalizedInput);
+  const lookup = normalizeCatalogInput(alias ? alias[1] : input);
+  const entries = Object.entries(catalog);
+  const idMatch = entries.find(([id]) => normalizeCatalogInput(id) === lookup);
+  if (idMatch) return { ok: true, id: idMatch[0] };
+
+  const matches = entries
+    .filter(([, entry]) => typeof entry.name === 'string' && normalizeCatalogInput(entry.name) === lookup)
+    .map(([id]) => id);
+  if (matches.length === 1) return { ok: true, id: matches[0] };
+  if (matches.length > 1) return { ok: false, reason: 'ambiguous', matches };
+  return { ok: false, reason: 'unknown' };
 }
 
 const LOOT_NAMES = {
@@ -690,6 +715,40 @@ const MONSTER_NAMES = {
   bazyliszki: 'bazyliszki'
 };
 
+const STEEL_WEAPON_TYPES = new Set(['human', 'humans', 'people', 'bandits', 'wilki']);
+
+function getWeaponType(itemId) {
+  if (typeof itemId !== 'string') return null;
+  if (itemId === 'srebrny_miecz' || itemId.startsWith('miecz_srebrny_')) return 'silver';
+  if (itemId.startsWith('miecz_stalowy_') || itemId === 'miecz_stalowy' || itemId === 'miecz_temerski') return 'steel';
+  const item = ITEMS[itemId];
+  return item?.school && item.slot === 'weapon' ? 'silver' : null;
+}
+
+function compareWeapons(first, second) {
+  const firstScore = first.attack * (1 + (first.critChance || 0) * 0.5);
+  const secondScore = second.attack * (1 + (second.critChance || 0) * 0.5);
+  return firstScore - secondScore;
+}
+
+function selectCombatWeapon(character, monsterType) {
+  const equipment = character.equipment || {};
+  let steel = ITEMS[equipment.steelWeapon];
+  let silver = ITEMS[equipment.silverWeapon];
+  const legacyWeaponIsInTypedSlot = equipment.weapon === equipment.steelWeapon ||
+    equipment.weapon === equipment.silverWeapon;
+  if (!legacyWeaponIsInTypedSlot && getWeaponType(equipment.weapon) === 'steel') steel = ITEMS[equipment.weapon];
+  if (!legacyWeaponIsInTypedSlot && getWeaponType(equipment.weapon) === 'silver') {
+    silver = ITEMS[equipment.weapon];
+  }
+  if (!steel) return silver || ITEMS[equipment.weapon];
+  if (!silver) return steel || ITEMS[equipment.weapon];
+
+  if (typeof monsterType === 'string' && STEEL_WEAPON_TYPES.has(monsterType)) return steel;
+  if (typeof monsterType === 'string' && Object.hasOwn(MONSTER_NAMES, monsterType)) return silver;
+  return compareWeapons(steel, silver) >= 0 ? steel : silver;
+}
+
 function ensureCharacter(user, username, now = Date.now()) {
   const isNewCharacter = !user.witcher;
   if (isNewCharacter) {
@@ -702,7 +761,7 @@ function ensureCharacter(user, username, now = Date.now()) {
       lastHealthUpdateAt: now,
       school: null,
       inventory: { srebrny_miecz: 1, miecz_stalowy: 1 },
-      equipment: { weapon: 'miecz_stalowy', armor: null },
+      equipment: { weapon: 'miecz_stalowy', steelWeapon: 'miecz_stalowy', silverWeapon: 'srebrny_miecz', armor: null },
       herbalism: { level: 1, xp: 0, lastGatherAt: null },
       starterKitGranted: true,
       activeActivity: null
@@ -741,6 +800,23 @@ function ensureCharacter(user, username, now = Date.now()) {
     character.inventory.miecz_stalowy = (character.inventory.miecz_stalowy || 0) + 1;
     if (!character.equipment.weapon) character.equipment.weapon = 'miecz_stalowy';
     character.starterKitGranted = true;
+  }
+  const legacyWeapon = character.equipment.weapon;
+  if (!Object.hasOwn(character.equipment, 'steelWeapon')) character.equipment.steelWeapon = null;
+  if (!Object.hasOwn(character.equipment, 'silverWeapon')) character.equipment.silverWeapon = null;
+  const legacyWeaponType = getWeaponType(legacyWeapon);
+  if (legacyWeaponType === 'steel' && !character.equipment.steelWeapon) character.equipment.steelWeapon = legacyWeapon;
+  if (legacyWeaponType === 'silver' && !character.equipment.silverWeapon) character.equipment.silverWeapon = legacyWeapon;
+  for (const type of ['steel', 'silver']) {
+    const slot = type === 'steel' ? 'steelWeapon' : 'silverWeapon';
+    if (character.equipment[slot]) continue;
+    const ownedWeapons = Object.keys(ITEMS)
+      .filter(itemId => getWeaponType(itemId) === type && character.inventory[itemId] > 0)
+      .sort((left, right) => compareWeapons(ITEMS[right], ITEMS[left]));
+    character.equipment[slot] = ownedWeapons[0] || null;
+  }
+  if (!ITEMS[character.equipment.weapon] || getWeaponType(character.equipment.weapon) === null) {
+    character.equipment.weapon = character.equipment.steelWeapon || character.equipment.silverWeapon || null;
   }
   if (!character.mutationBonuses || typeof character.mutationBonuses !== 'object') {
     character.mutationBonuses = { attack: 0, defense: 0, critChance: 0 };
@@ -802,7 +878,9 @@ function regenerateHealth(character, now = Date.now()) {
 
   const elapsedMinutes = (now - previousUpdate) / MINUTE;
   const oldHealth = character.health;
-  character.health = Math.min(100, character.health + elapsedMinutes * HEALTH_REGEN_PER_MINUTE);
+  const school = WITCHER_SCHOOLS.find(entry => entry.id === character.school);
+  character.health = Math.min(100, character.health +
+    elapsedMinutes * (HEALTH_REGEN_PER_MINUTE + (school?.healthRegenBonus || 0)));
   character.lastHealthUpdateAt = now;
   return character.health - oldHealth;
 }
@@ -821,7 +899,7 @@ function getHerbalismStatus(character, now = Date.now()) {
   };
 }
 
-function gatherHerbs(character, now = Date.now(), random = Math.random) {
+function startHerbGathering(character, now = Date.now()) {
   if (!character.school) return { ok: false, reason: 'school' };
   if (character.activeActivity) return { ok: false, reason: 'busy' };
 
@@ -831,6 +909,25 @@ function gatherHerbs(character, now = Date.now(), random = Math.random) {
   }
 
   const herbalism = character.herbalism || (character.herbalism = { level: 1, xp: 0, lastGatherAt: null });
+  regenerateHealth(character, now);
+  const finishesAt = now + HERBALISM_GATHER_DURATION;
+  herbalism.lastGatherAt = now;
+  character.activeActivity = {
+    kind: 'herbalism',
+    activityId: 'herb_gathering',
+    startedAt: now,
+    finishesAt,
+    levelAtStart: herbalism.level
+  };
+  return { ok: true, finishesAt, duration: HERBALISM_GATHER_DURATION };
+}
+
+function completeHerbGathering(character, now, random) {
+  const active = character.activeActivity;
+  if (!active || active.kind !== 'herbalism' || now < active.finishesAt) return null;
+
+  const herbalism = character.herbalism || (character.herbalism = { level: 1, xp: 0, lastGatherAt: null });
+  herbalism.level = active.levelAtStart || herbalism.level || 1;
   const herbs = [{ id: 'ziola', count: randomBetween(random, 2, 4) }];
   const rareHerbs = [
     { id: 'korzen_mandragory', requiredLevel: 1, baseChance: 0.05, chancePerLevel: 0.05, maxChance: 0.25 },
@@ -856,21 +953,41 @@ function gatherHerbs(character, now = Date.now(), random = Math.random) {
     herbalism.level++;
   }
   if (herbalism.level >= HERBALISM_MAX_LEVEL) herbalism.xp = 0;
-  herbalism.lastGatherAt = now;
+  character.activeActivity = null;
+  character.lastHealthUpdateAt = now;
 
   return {
-    ok: true,
+    kind: 'herbalism',
+    name: 'Zbieranie ziół',
     herbs,
     xpGained: HERBALISM_XP_PER_HARVEST,
     level: herbalism.level,
     levelsGained: herbalism.level - previousLevel,
-    cooldownEndsAt: now + HERBALISM_COOLDOWN
+    cooldownEndsAt: herbalism.lastGatherAt + HERBALISM_COOLDOWN
   };
 }
 
 function chooseSchool(character, schoolId) {
-  const school = WITCHER_SCHOOLS.find(entry => entry.id === schoolId);
-  if (!school) return { ok: false, reason: 'unknown' };
+  const schoolAliases = {
+    wilk: 'wilczej_szkoly',
+    wilka: 'wilczej_szkoly',
+    szkola_wilka: 'wilczej_szkoly',
+    gryf: 'gryfa',
+    szkola_gryfa: 'gryfa',
+    niedzwiedz: 'niedzwiedzia',
+    niedzwiedzka: 'niedzwiedzia',
+    szkola_niedzwiedzia: 'niedzwiedzia',
+    kot: 'kota',
+    szkola_kota: 'kota',
+    zmija: 'zmiji',
+    szkola_zmiji: 'zmiji',
+    mantikora: 'mantikory',
+    szkola_mantikory: 'mantikory'
+  };
+  const schoolCatalog = Object.fromEntries(WITCHER_SCHOOLS.map(school => [school.id, school]));
+  const selection = resolveCatalogId(schoolId, schoolCatalog, schoolAliases);
+  if (!selection.ok) return selection;
+  const school = schoolCatalog[selection.id];
   if (character.school) return { ok: false, reason: 'chosen', school: WITCHER_SCHOOLS.find(entry => entry.id === character.school) };
   character.school = school.id;
   return { ok: true, school };
@@ -1082,7 +1199,9 @@ function simulateBattle(character, activity, kind, random) {
     : activity.monsterType;
   const monstersEncountered = randomBetween(random, activity.minMonsters, activity.maxMonsters);
   const monsterName = activity.boss || MONSTER_NAMES[monsterType] || monsterType;
-  const weapon = ITEMS[character.equipment.weapon];
+  const weapon = selectCombatWeapon(character, kind === 'hunt' && activity.monsterTypes.length > 1
+    ? null
+    : monsterType);
   const armor = ITEMS[character.equipment.armor];
   const school = WITCHER_SCHOOLS.find(entry => entry.id === character.school);
   const mutationBonuses = getMutationBonuses(character);
@@ -1154,6 +1273,7 @@ function simulateBattle(character, activity, kind, random) {
 function completeActivity(character, now = Date.now(), random = Math.random) {
   const active = character.activeActivity;
   if (!active || now < active.finishesAt) return null;
+  if (active.kind === 'herbalism') return completeHerbGathering(character, now, random);
 
   const activities = active.kind === 'mission' ? MISSIONS : HUNTS;
   const activity = activities[active.activityId];
@@ -1243,8 +1363,9 @@ function completeActivity(character, now = Date.now(), random = Math.random) {
 }
 
 function craftItem(character, recipeId, random = Math.random) {
-  const recipe = CRAFTING_RECIPES[recipeId];
-  if (!recipe) return { ok: false, reason: 'unknown' };
+  const resolution = resolveCatalogId(recipeId, CRAFTING_RECIPES);
+  if (!resolution.ok) return resolution;
+  const recipe = CRAFTING_RECIPES[resolution.id];
   const outputId = recipe.randomItems
     ? recipe.randomItems[Math.min(recipe.randomItems.length - 1, Math.floor(Math.max(0, random()) * recipe.randomItems.length))]
     : recipe.output;
@@ -1270,9 +1391,10 @@ function craftItem(character, recipeId, random = Math.random) {
 }
 
 function buyItem(character, itemId) {
-  itemId = resolveItemId(itemId);
+  const resolution = resolveCatalogId(itemId, ITEMS, ITEM_ALIASES);
+  if (!resolution.ok) return resolution;
+  itemId = resolution.id;
   const item = ITEMS[itemId];
-  if (!item) return { ok: false, reason: 'unknown' };
   if (item.craftOnly) return { ok: false, reason: 'craft' };
   if (item.school && item.school !== character.school) return { ok: false, reason: 'school', requiredSchool: item.school };
   if (!character.school) return { ok: false, reason: 'school' };
@@ -1287,16 +1409,25 @@ function buyItem(character, itemId) {
 }
 
 function equipItem(character, itemId) {
-  itemId = resolveItemId(itemId);
+  const resolution = resolveCatalogId(itemId, ITEMS, ITEM_ALIASES);
+  if (!resolution.ok) return resolution;
+  itemId = resolution.id;
   const item = ITEMS[itemId];
-  if (item?.mutationBonus) return equipMutagen(character, itemId);
-  if (!item || item.type !== 'equipment') return { ok: false, reason: 'unknown' };
+  if (item.mutationBonus) return equipMutagen(character, itemId);
+  if (item.type !== 'equipment') return { ok: false, reason: 'unknown' };
   if (item.school && item.school !== character.school) return { ok: false, reason: 'school', requiredSchool: item.school };
   if (!character.school) return { ok: false, reason: 'school' };
   if (character.level < (item.requiredLevel || 1)) return { ok: false, reason: 'level', requiredLevel: item.requiredLevel || 1 };
   if (!character.inventory[itemId]) return { ok: false, reason: 'missing' };
 
-  character.equipment[item.slot] = itemId;
+  if (item.slot === 'weapon') {
+    const weaponType = getWeaponType(itemId);
+    if (!weaponType) return { ok: false, reason: 'unknown' };
+    character.equipment[weaponType === 'steel' ? 'steelWeapon' : 'silverWeapon'] = itemId;
+    character.equipment.weapon = itemId;
+  } else {
+    character.equipment[item.slot] = itemId;
+  }
   return { ok: true, item };
 }
 
@@ -1314,6 +1445,9 @@ function equipMutagen(character, itemId) {
 }
 
 function removeMutagen(character, itemId) {
+  const resolution = resolveCatalogId(itemId, ITEMS, ITEM_ALIASES);
+  if (!resolution.ok) return resolution;
+  itemId = resolution.id;
   const equippedMutagens = character.equippedMutagens || [];
   const index = equippedMutagens.indexOf(itemId);
   if (index < 0) return { ok: false, reason: 'missing' };
@@ -1323,6 +1457,9 @@ function removeMutagen(character, itemId) {
 }
 
 function useItem(character, itemId) {
+  const resolution = resolveCatalogId(itemId, ITEMS, ITEM_ALIASES);
+  if (!resolution.ok) return resolution;
+  itemId = resolution.id;
   const item = ITEMS[itemId];
   if (!item || item.type !== 'consumable') return { ok: false, reason: 'unknown' };
   if (!character.inventory[itemId]) return { ok: false, reason: 'missing' };
@@ -1338,13 +1475,16 @@ function useItem(character, itemId) {
   if (character.health >= 100) return { ok: false, reason: 'healthy' };
 
   const oldHealth = character.health;
-  character.health = Math.min(100, character.health + item.heal);
+  const school = WITCHER_SCHOOLS.find(entry => entry.id === character.school);
+  const healing = Math.round(item.heal * (1 + (school?.healingBonus || 0)));
+  character.health = Math.min(100, character.health + healing);
   character.inventory[itemId]--;
   return { ok: true, item, healed: character.health - oldHealth, health: character.health };
 }
 
 function sellLoot(character, itemId, quantity) {
-  if (itemId === 'wszystko' || itemId === 'all') {
+  const normalizedInput = normalizeCatalogInput(itemId);
+  if (normalizedInput === 'wszystko' || normalizedInput === 'all') {
     const sold = [];
     let gold = 0;
     for (const [id, item] of Object.entries(SELLABLE_ITEMS)) {
@@ -1360,8 +1500,10 @@ function sellLoot(character, itemId, quantity) {
     return { ok: true, sold, gold };
   }
 
+  const resolution = resolveCatalogId(itemId, SELLABLE_ITEMS);
+  if (!resolution.ok) return resolution;
+  itemId = resolution.id;
   const item = SELLABLE_ITEMS[itemId];
-  if (!item) return { ok: false, reason: 'unknown' };
   const owned = character.inventory[itemId] || 0;
   const amount = quantity === undefined ? owned : Number(quantity);
   if (!Number.isInteger(amount) || amount < 1) return { ok: false, reason: 'quantity' };
@@ -1380,6 +1522,7 @@ module.exports = {
   MAX_LEVEL,
   HEALTH_REGEN_PER_MINUTE,
   HERBALISM_COOLDOWN,
+  HERBALISM_GATHER_DURATION,
   HERBALISM_MAX_LEVEL,
   HERBALISM_XP_PER_HARVEST,
   HERBALISM_XP_PER_LEVEL,
@@ -1403,7 +1546,7 @@ module.exports = {
   completeActivity,
   chooseSchool,
   craftItem,
-  gatherHerbs,
+  startHerbGathering,
   ensureCharacter,
   equipItem,
   getMutationBonuses,
@@ -1413,8 +1556,10 @@ module.exports = {
   resolvePvPRound,
   recordPvPMatch,
   canPlayRankedPvP,
+  resolveCatalogId,
   regenerateHealth,
   settlePvP,
+  selectCombatWeapon,
   startActivity,
   startRandomMission,
   sellLoot,

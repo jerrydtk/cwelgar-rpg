@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, EmbedBuilder, GatewayIntentBits } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, EmbedBuilder, GatewayIntentBits, StringSelectMenuBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -66,7 +66,9 @@ for (const user of Object.values(data.users)) {
     const character = Rpg.ensureCharacter(user);
     character.school = 'wilczej_szkoly';
     migratedProfiles = true;
-  } else if (!Object.hasOwn(user.witcher, 'school') || !user.witcher.starterKitGranted) {
+  } else if (!Object.hasOwn(user.witcher, 'school') || !user.witcher.starterKitGranted ||
+      !Object.hasOwn(user.witcher.equipment || {}, 'steelWeapon') ||
+      !Object.hasOwn(user.witcher.equipment || {}, 'silverWeapon')) {
     Rpg.ensureCharacter(user);
     migratedProfiles = true;
   }
@@ -79,6 +81,46 @@ function durationText(milliseconds) {
   return `${minutes} min`;
 }
 
+function catalogMatchMessage(matches, catalog, subject) {
+  if (!matches?.length) return null;
+  const options = matches.slice(0, 5).map(id => `\`${id}\` — ${catalog[id]?.name || id}`);
+  const remaining = matches.length > options.length ? `\n…i ${matches.length - options.length} kolejnych.` : '';
+  return `Ta nazwa pasuje do kilku ${subject}. Użyj jednego z ID:\n${options.join('\n')}${remaining}`;
+}
+
+function catalogEmbed(listings, pageNumber, totalPages, character, title, footer) {
+  return new EmbedBuilder()
+    .setTitle(`${title} · strona ${pageNumber}/${totalPages}`)
+    .setDescription(`💰 Saldo: **${character.coins} koron**`)
+    .addFields(listings.slice((pageNumber - 1) * 12, pageNumber * 12))
+    .setFooter({ text: footer })
+    .setColor(0x547a46);
+}
+
+function catalogComponents(pageNumber, totalPages, menuId) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${menuId}:page`)
+    .setPlaceholder('Przejdź do strony…')
+    .addOptions(Array.from({ length: totalPages }, (_, index) => ({
+      label: `Strona ${index + 1}`,
+      value: String(index + 1),
+      default: index + 1 === pageNumber
+    })));
+  const navigation = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${menuId}:previous`)
+      .setLabel('Poprzednia')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pageNumber <= 1),
+    new ButtonBuilder()
+      .setCustomId(`${menuId}:next`)
+      .setLabel('Następna')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pageNumber >= totalPages)
+  );
+  return [new ActionRowBuilder().addComponents(select), navigation];
+}
+
 function createNoticeEmbed(title, description, color = 0x547a46) {
   return new EmbedBuilder()
     .setTitle(title)
@@ -87,7 +129,8 @@ function createNoticeEmbed(title, description, color = 0x547a46) {
 }
 
 function createCharacterCard(character, user) {
-  const weaponItem = Rpg.ITEMS[character.equipment.weapon];
+  const steelWeaponItem = Rpg.ITEMS[character.equipment.steelWeapon];
+  const silverWeaponItem = Rpg.ITEMS[character.equipment.silverWeapon];
   const armorItem = Rpg.ITEMS[character.equipment.armor];
   const school = Rpg.WITCHER_SCHOOLS.find(entry => entry.id === character.school);
   const mutationBonuses = Rpg.getMutationBonuses(character);
@@ -96,8 +139,8 @@ function createCharacterCard(character, user) {
   const mutagenSummary = equippedMutagens.length
     ? equippedMutagens.map((itemId, index) => `${index + 1}. ${Rpg.ITEMS[itemId]?.name || itemId}`).join('\n')
     : 'Brak założonych mutagenów';
-  const weapon = weaponItem
-    ? `${weaponItem.name} · ATK +${weaponItem.attack}${weaponItem.critChance ? ` · krytyk ${Math.round(weaponItem.critChance * 100)}%` : ''}`
+  const formatWeapon = item => item
+    ? `${item.name} · ATK +${item.attack}${item.critChance ? ` · krytyk ${Math.round(item.critChance * 100)}%` : ''}`
     : 'brak';
   const armor = armorItem ? `${armorItem.name} · DEF +${armorItem.defense}` : 'brak';
   const inventory = Object.entries(character.inventory)
@@ -105,10 +148,14 @@ function createCharacterCard(character, user) {
     .map(([id, count]) => `${Rpg.ITEMS[id]?.name || Rpg.LOOT_NAMES[id] || id} x${count}`);
   const active = character.activeActivity;
   const activities = active?.kind === 'hunt' ? Rpg.HUNTS : Rpg.MISSIONS;
-  const activityName = active ? activities[active.activityId]?.name || 'Wyprawa' : 'Brak';
+  const activityName = active?.kind === 'herbalism'
+    ? 'Zbieranie ziół'
+    : active
+      ? activities[active.activityId]?.name || 'Wyprawa'
+      : 'Brak';
   const activityStatus = active
     ? `${activityName} · powrót <t:${Math.floor(active.finishesAt / 1000)}:R>`
-    : 'Brak aktywnej wyprawy';
+    : 'Nic teraz nie robi';
   const herbalism = Rpg.getHerbalismStatus(character);
   const isMaxLevel = character.level >= Rpg.MAX_LEVEL;
   const xpRequired = Rpg.xpToNextLevel(character.level);
@@ -124,14 +171,15 @@ function createCharacterCard(character, user) {
       { name: 'Doświadczenie', value: xpProgress, inline: true },
       { name: 'Korony', value: `${character.coins}`, inline: true },
       { name: 'Zdrowie', value: `${character.health}/100`, inline: true },
-      { name: 'Szkoła', value: school ? `${school.name} · ${school.bonus}` : 'Niewybrana · użyj `!szkoly` i `!szkola <id>`', inline: false },
-      { name: 'Broń', value: weapon, inline: true },
+      { name: 'Szkoła', value: school ? `${school.name} · ${school.bonus}` : 'Niewybrana · użyj `!szkoly` i `!szkola wilk` lub innej nazwy szkoły', inline: false },
+      { name: '⚔️ Miecz stalowy', value: formatWeapon(steelWeaponItem), inline: true },
+      { name: '🗡️ Miecz srebrny', value: formatWeapon(silverWeaponItem), inline: true },
       { name: 'Pancerz', value: armor, inline: true },
       { name: `Mutageny (${equippedMutagens.length}/${Rpg.MUTAGEN_SLOT_LIMIT})`, value: `${mutagenSummary}\n${mutationSummary}`, inline: false },
       { name: 'Eliksir na następną walkę', value: character.combatBuff?.name || 'brak', inline: true },
       { name: 'Zielarstwo', value: `poziom ${herbalism.level} · ${herbalism.level >= Rpg.HERBALISM_MAX_LEVEL ? 'MAX' : `${herbalism.xp}/${herbalism.xpToNextLevel} XP`}`, inline: true },
       { name: 'Ekwipunek', value: inventory.length ? inventory.slice(0, 15).join('\n') : 'Pusty', inline: false },
-      { name: 'Wyprawa', value: activityStatus, inline: false }
+      { name: 'Aktywność', value: activityStatus, inline: false }
     );
 }
 
@@ -144,6 +192,19 @@ function findActivityChannel(guild) {
 }
 
 function formatActivityResult(userId, result) {
+  if (result.kind === 'herbalism') {
+    const levelUp = result.levelsGained
+      ? `\n🌿 Awans na poziom zielarstwa **${result.level}**!`
+      : '';
+    const harvest = new EmbedBuilder()
+      .setTitle('🌿 Powrót ze zbiorów')
+      .setDescription(`Zbieranie ziół zakończone.\n\n**Znalezione składniki**\n${result.herbs
+        .map(herb => `• ${Rpg.LOOT_NAMES[herb.id]} ×${herb.count}`)
+        .join('\n')}\n\n**Zielarstwo**\nPoziom ${result.level}/${Rpg.HERBALISM_MAX_LEVEL} · +${result.xpGained} XP${levelUp}\n\nNastępne zbiory: <t:${Math.floor(result.cooldownEndsAt / 1000)}:R>.`)
+      .setColor(0x547a46);
+    return { content: `<@${userId}> wraca ze zbiorów ziół.`, embeds: [harvest] };
+  }
+
   const lootCounts = result.loot.reduce((counts, itemId) => {
     counts[itemId] = (counts[itemId] || 0) + 1;
     return counts;
@@ -384,7 +445,7 @@ async function runPvPChallenge(message, challenger, opponentUser) {
 
   const opponent = ensurePlayer(opponentUser.id, opponentUser.username);
   if (!challenger.school || !opponent.school) {
-    return message.reply('Obaj gracze muszą najpierw wybrać szkołę wiedźmińską (`!szkoly`, potem `!szkola <id>`).');
+    return message.reply('Obaj gracze muszą najpierw wybrać szkołę wiedźmińską (`!szkoly`, potem `!szkola wilk` lub inna nazwa szkoły).');
   }
   if (challenger.activeActivity || opponent.activeActivity) {
     return message.reply('Nie można rozpocząć pojedynku, gdy któryś z graczy jest na wyprawie.');
@@ -511,6 +572,7 @@ async function handleCommand(message, character) {
   const [rawCommand, ...args] = message.content.trim().split(/\s+/);
   const command = rawCommand.toLowerCase();
   const argument = args[0]?.toLowerCase();
+  const fullArgument = args.join(' ');
 
   if (completePlayerActivity(message.author.id, character, message.channel)) return;
 
@@ -522,7 +584,7 @@ async function handleCommand(message, character) {
       .addFields(
         {
           name: '1. Stwórz postać i wybierz szkołę',
-          value: '`!wiedzmin` — pokaż kartę postaci. Na start dostajesz 150 koron, miecz stalowy i srebrny.\n`!szkoly` — zobacz szkoły i ich premie.\n`!szkola <id>` — wybierz szkołę; decyzja jest stała, a rynsztunek innych szkół będzie niedostępny.\n`!imie <nazwa>` — zmień imię postaci.',
+          value: '`!wiedzmin` — pokaż kartę postaci. Na start dostajesz 150 koron, miecz stalowy i srebrny.\n`!szkoly` — zobacz szkoły i ich premie.\n`!szkola <nazwa>` — wybierz szkołę; decyzja jest stała, a rynsztunek innych szkół będzie niedostępny. Wilka wybierzesz np. przez `!szkola wilk`.\n`!imie <nazwa>` — zmień imię postaci.',
           inline: false
         },
         {
@@ -532,12 +594,12 @@ async function handleCommand(message, character) {
         },
         {
           name: '3. Sprawdź ekwipunek i przygotuj się',
-          value: '`!ekwipunek` — zobacz plecak oraz założoną broń i zbroję.\n`!sklep` — przeglądaj przedmioty i skup; `!kup <id>` — kup przedmiot, `!wyposaz <id>` — załóż broń, zbroję lub mutagen.\n`!uzyj <id>` — użyj mikstury albo przygotuj eliksir na następną walkę.\n`!mutageny` pokazuje maksymalnie 6 założonych mutagenów; zdejmiesz je przez `!zdejmijmutagen <id>`.',
+          value: '`!ekwipunek` — zobacz plecak oraz założone miecze i zbroję.\n`!sklep` — przeglądaj przedmioty do kupienia; `!skup` — ceny materiałów i trofeów. `!kup <nazwa|id>` — kup przedmiot, `!wyposaz <nazwa|id>` — załóż broń, zbroję lub mutagen. Miecze stalowe służą przeciw ludziom i wilkom, srebrne przeciw potworom.\n`!uzyj <nazwa|id>` — użyj mikstury albo przygotuj eliksir na następną walkę.\n`!mutageny` pokazuje maksymalnie 6 założonych mutagenów; zdejmiesz je przez `!zdejmijmutagen <nazwa|id>`. Przy niejednoznacznej nazwie bot poda pasujące ID.',
           inline: false
         },
         {
           name: '4. Zbieraj, wytwarzaj i zarabiaj',
-          value: '`!zielarstwo` — zbierz zioła i rozwijaj umiejętność (wyprawa odnawia się co 30 minut). `!alchemia` — zobacz receptury i posiadane składniki; `!wytworz <id_przepisu>` — przygotuj miksturę lub mutagen.\nMateriały i trofea zdobywasz też podczas przygód. `!sprzedaj <id> [ilość]` — sprzedaj wybrane materiały; `!sprzedaj wszystko` — sprzedaj cały skupowalny łup.',
+          value: '`!zielarstwo` — wyślij wiedźmina na 15-minutowe zbiory; zioła i XP dostaniesz po powrocie. `!zielarstwo status` — sprawdź zielarstwo i odnowienie. `!alchemia` — zobacz receptury i posiadane składniki; `!wytworz <nazwa|id_przepisu>` — przygotuj miksturę lub mutagen.\nMateriały i trofea zdobywasz też podczas przygód. `!skup` pokazuje ceny. `!sprzedaj <nazwa|id> [ilość]` — sprzedaj wybrane materiały; `!sprzedaj wszystko` — sprzedaj cały skupowalny łup.',
           inline: false
         },
         {
@@ -584,13 +646,13 @@ async function handleCommand(message, character) {
       .setTitle('🐺 Szkoły wiedźmińskie')
       .setDescription('Wybierz ścieżkę, która pasuje do Twojego stylu walki. Decyzja jest stała.')
       .addFields(schools)
-      .setFooter({ text: 'Wybór: !szkola <id>' })
+      .setFooter({ text: 'Wybór: !szkola <nazwa> · np. !szkola wilk' })
       .setColor(0x547a46)] });
   }
 
   if (command === '!szkola') {
-    if (!argument) return message.reply('Wybierz szkołę komendą `!szkola <id>`. Dostępne szkoły: `!szkoly`.');
-    const selection = Rpg.chooseSchool(character, argument);
+    if (!fullArgument) return message.reply('Wybierz szkołę komendą `!szkola <nazwa>`. Dostępne szkoły: `!szkoly`.');
+    const selection = Rpg.chooseSchool(character, fullArgument);
     if (!selection.ok) {
       if (selection.reason === 'chosen') return message.reply(`Należysz już do **${selection.school.name}**. Wyboru szkoły nie można zmienić.`);
       return message.reply('Nie znam takiej szkoły. Zobacz dostępne opcje komendą `!szkoly`.');
@@ -618,15 +680,16 @@ async function handleCommand(message, character) {
     });
     return message.reply({ embeds: [new EmbedBuilder()
       .setTitle('⚗️ Alchemia')
-      .setDescription('Łącz składniki, by przygotować mikstury, oleje i mutageny. Zielarstwo odnawia się co 30 minut; spróbuj `!zielarstwo`.')
+      .setDescription('Łącz składniki, by przygotować mikstury, oleje i mutageny. Wyślij wiedźmina na 15-minutowe zbiory przez `!zielarstwo`; po powrocie dostaniesz zioła i XP.')
       .addFields(recipes)
       .setColor(0x547a46)] });
   }
 
   if (command === '!wytworz') {
-    if (!argument) return message.reply('Użycie: `!wytworz <id_przepisu>`. Zobacz przepisy przez `!receptury`.');
-    const crafted = Rpg.craftItem(character, argument);
+    if (!fullArgument) return message.reply('Użycie: `!wytworz <nazwa|id_przepisu>`. Zobacz przepisy przez `!receptury`.');
+    const crafted = Rpg.craftItem(character, fullArgument);
     if (!crafted.ok) {
+      if (crafted.reason === 'ambiguous') return message.reply(catalogMatchMessage(crafted.matches, Rpg.CRAFTING_RECIPES, 'przepisy'));
       if (crafted.reason === 'level') return message.reply(`Ten przepis wymaga poziomu **${crafted.requiredLevel}**.`);
       if (crafted.reason === 'herbalism') return message.reply(`Ten przepis wymaga **${crafted.requiredLevel}. poziomu zielarstwa**. Użyj \`!zielarstwo\`, aby zbierać składniki i rozwijać umiejętność.`);
       if (crafted.reason === 'ingredients') {
@@ -651,7 +714,7 @@ async function handleCommand(message, character) {
   }
 
   if (!character.school) {
-    return message.reply('Zanim wyruszysz, wybierz szkołę wiedźmińską: sprawdź `!szkoly`, a następnie użyj `!szkola <id>`.');
+    return message.reply('Zanim wyruszysz, wybierz szkołę wiedźmińską: sprawdź `!szkoly`, a następnie użyj `!szkola wilk` lub nazwy innej szkoły.');
   }
 
   if (command === '!zielarstwo') {
@@ -660,28 +723,25 @@ async function handleCommand(message, character) {
       const cooldown = status.cooldownRemaining
         ? `Zbieranie będzie gotowe za **${durationText(status.cooldownRemaining)}**.`
         : 'Możesz teraz wyruszyć na zbiory.';
+      const activity = character.activeActivity?.kind === 'herbalism'
+        ? `\nTwoja postać zbiera zioła i wróci <t:${Math.floor(character.activeActivity.finishesAt / 1000)}:R>.`
+        : '';
       return message.reply({ embeds: [createNoticeEmbed(
         `🌿 Zielarstwo · poziom ${status.level}/${Rpg.HERBALISM_MAX_LEVEL}`,
-        `${status.level >= Rpg.HERBALISM_MAX_LEVEL ? 'Umiejętność maksymalna.' : `Postęp: **${status.xp}/${status.xpToNextLevel} XP**.`}\n${cooldown}`
+        `${status.level >= Rpg.HERBALISM_MAX_LEVEL ? 'Umiejętność maksymalna.' : `Postęp: **${status.xp}/${status.xpToNextLevel} XP**.`}\n${cooldown}${activity}`
       )] });
     }
-    if (argument) return message.reply('Użycie: `!zielarstwo` — zbierz zioła albo `!zielarstwo status` — sprawdź umiejętność i czas odnowienia.');
-    const gathered = Rpg.gatherHerbs(character);
-    if (!gathered.ok) {
-      if (gathered.reason === 'busy') return message.reply('Nie możesz zbierać ziół podczas aktywnej wyprawy.');
-      if (gathered.reason === 'cooldown') return message.reply(`Zbieranie ziół będzie dostępne za **${durationText(gathered.remaining)}**. Sprawdź postęp przez \`!zielarstwo status\`.`);
-      throw new Error(`Nie udało się zebrać ziół: ${gathered.reason}`);
+    if (argument) return message.reply('Użycie: `!zielarstwo` — wyrusz na 15-minutowe zbiory albo `!zielarstwo status` — sprawdź umiejętność i czas odnowienia.');
+    const gathering = Rpg.startHerbGathering(character);
+    if (!gathering.ok) {
+      if (gathering.reason === 'busy') return message.reply('Nie możesz wyruszyć na zbiory podczas innej aktywności. Sprawdź `!status`, aby zobaczyć, kiedy postać wróci.');
+      if (gathering.reason === 'cooldown') return message.reply(`Zbieranie ziół będzie dostępne za **${durationText(gathering.remaining)}**. Sprawdź postęp przez \`!zielarstwo status\`.`);
+      throw new Error(`Nie udało się rozpocząć zbierania ziół: ${gathering.reason}`);
     }
     saveData();
-    const loot = gathered.herbs
-      .map(herb => `${Rpg.LOOT_NAMES[herb.id]} x${herb.count}`)
-      .join(', ');
-    const levelUp = gathered.levelsGained
-      ? `\n🌿 Zielarstwo awansuje na poziom **${gathered.level}**!`
-      : '';
     return message.reply({ embeds: [createNoticeEmbed(
-      gathered.levelsGained ? '🌱 Nowy poziom zielarstwa!' : '🌿 Zebrane składniki',
-      `**Znaleziono**\n${gathered.herbs.map(herb => `• ${Rpg.LOOT_NAMES[herb.id]} ×${herb.count}`).join('\n')}\n\n**Zielarstwo**\nPoziom ${gathered.level}/${Rpg.HERBALISM_MAX_LEVEL} · +${gathered.xpGained} XP${levelUp}\n\nNastępne zbiory: <t:${Math.floor(gathered.cooldownEndsAt / 1000)}:R>.`
+      '🌿 Wyruszasz na zbiory',
+      `Wiedźmin wróci z ziołami <t:${Math.floor(gathering.finishesAt / 1000)}:R>.\nSprawdź postęp komendą \`!status\`.`
     )] });
   }
 
@@ -713,7 +773,7 @@ async function handleCommand(message, character) {
 
   if (command === '!polowanie') {
     if (!argument || /^\d+$/.test(argument)) {
-      const pageNumber = argument ? Number(argument) : 1;
+      let pageNumber = argument ? Number(argument) : 1;
       const listing = activityList(Rpg.HUNTS, pageNumber, character);
       if (!listing) return message.reply('Nie ma takiej strony wypraw. Użyj `!polowanie` lub podaj numer strony.');
       return message.reply({ embeds: [new EmbedBuilder()
@@ -752,14 +812,16 @@ async function handleCommand(message, character) {
     const items = Object.entries(character.inventory)
       .filter(([, count]) => count > 0)
       .map(([id, count]) => `${Rpg.ITEMS[id]?.name || Rpg.LOOT_NAMES[id] || id} x${count}`);
-    const weapon = Rpg.ITEMS[character.equipment.weapon]?.name || 'brak';
+    const steelWeapon = Rpg.ITEMS[character.equipment.steelWeapon]?.name || 'brak';
+    const silverWeapon = Rpg.ITEMS[character.equipment.silverWeapon]?.name || 'brak';
     const armor = Rpg.ITEMS[character.equipment.armor]?.name || 'brak';
     return message.reply({
       embeds: [new EmbedBuilder()
         .setTitle(`🎒 Ekwipunek: ${character.name}`)
         .setDescription(items.length ? `Przedmioty w plecaku: **${items.length}**` : 'Plecak jest pusty.')
         .addFields(
-          { name: '⚔️ Oręż', value: weapon, inline: true },
+          { name: '⚔️ Miecz stalowy', value: steelWeapon, inline: true },
+          { name: '🗡️ Miecz srebrny', value: silverWeapon, inline: true },
           { name: '🛡️ Zbroja', value: armor, inline: true },
           { name: '🎒 Zawartość plecaka', value: items.length ? items.slice(0, 20).join('\n').slice(0, 1024) : 'Brak przedmiotów.', inline: false }
         )
@@ -780,14 +842,17 @@ async function handleCommand(message, character) {
         { name: 'Założone', value: lines.join('\n') || 'Brak założonych mutagenów.', inline: false },
         { name: 'W plecaku', value: available.join('\n').slice(0, 1024) || 'Brak mutagenów.', inline: false }
       )
-      .setFooter({ text: 'Załóż: !wyposaz <id> · Zdejmij: !zdejmijmutagen <id>' })
+      .setFooter({ text: 'Załóż: !wyposaz <nazwa|id> · Zdejmij: !zdejmijmutagen <nazwa|id>' })
       .setColor(0x547a46)] });
   }
 
   if (command === '!zdejmijmutagen') {
-    if (!argument) return message.reply('Użycie: `!zdejmijmutagen <id_mutagenu>`. Id znajdziesz przez `!mutageny`.');
-    const removed = Rpg.removeMutagen(character, argument);
-    if (!removed.ok) return message.reply('Ten mutagen nie jest aktualnie założony. Sprawdź `!mutageny`.');
+    if (!fullArgument) return message.reply('Użycie: `!zdejmijmutagen <nazwa|id_mutagenu>`. Nazwy znajdziesz przez `!mutageny`.');
+    const removed = Rpg.removeMutagen(character, fullArgument);
+    if (!removed.ok) {
+      if (removed.reason === 'ambiguous') return message.reply(catalogMatchMessage(removed.matches, Rpg.ITEMS, 'mutageny'));
+      return message.reply('Ten mutagen nie jest aktualnie założony. Sprawdź `!mutageny`.');
+    }
     saveData();
     return message.reply({ embeds: [createNoticeEmbed(
       `🧬 Zdjęto ${removed.item.name}`,
@@ -795,7 +860,7 @@ async function handleCommand(message, character) {
     )] });
   }
 
-  if (command === '!sklep' || command === '!shop') {
+  if (command === '!sklep' || command === '!shop' || command === '!skup') {
     const itemListings = Object.entries(Rpg.ITEMS).filter(([, item]) => !item.craftOnly).map(([id, item]) => {
       const requiredLevel = item.requiredLevel ? ` · wymagany poziom ${item.requiredLevel}` : '';
       const schoolRequirement = item.school
@@ -827,26 +892,73 @@ async function handleCommand(message, character) {
       value: `ID: \`${id}\``,
       inline: true
     }));
-    const allListings = [...itemListings, ...saleListings];
+    const isPawnShop = command === '!skup';
+    const listings = isPawnShop ? saleListings : itemListings;
+    const menuId = isPawnShop ? 'pawnshop' : 'shop';
+    const title = isPawnShop ? '🪙 Skup materiałów i trofeów' : '🛒 Sklep';
+    const footer = isPawnShop
+      ? 'Sprzedaj: !sprzedaj <nazwa|id|wszystko> [ilość]'
+      : 'Kup: !kup <nazwa|id>';
     const pageSize = 12;
-    const totalPages = Math.ceil(allListings.length / pageSize);
-    const pageNumber = argument ? Number(argument) : 1;
+    const totalPages = Math.ceil(listings.length / pageSize);
+    let pageNumber = argument ? Number(argument) : 1;
     if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > totalPages) {
-      return message.reply(`Podaj numer strony od 1 do ${totalPages}: \`!sklep <strona>\`.`);
+      return message.reply(`Podaj numer strony od 1 do ${totalPages}: \`${command} <strona>\`.`);
     }
-    const listings = allListings.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);
-    return message.reply({ embeds: [new EmbedBuilder()
-      .setTitle(`🛒 Sklep i skup · strona ${pageNumber}/${totalPages}`)
-      .setDescription(`Zakupy oraz wycena materiałów i trofeów.\n💰 Saldo: **${character.coins} koron**`)
-      .addFields(listings)
-      .setFooter({ text: 'Kup: !kup <id> · Sprzedaj: !sprzedaj <id|wszystko> [ilość]' })
-      .setColor(0x547a46)] });
+    const shopMessage = await message.reply({
+      embeds: [catalogEmbed(listings, pageNumber, totalPages, character, title, footer)],
+      components: catalogComponents(pageNumber, totalPages, menuId)
+    });
+    const collector = shopMessage.createMessageComponentCollector({
+      time: 10 * 60 * 1000,
+      filter: interaction => interaction.customId.startsWith(`${menuId}:`)
+    });
+    collector.on('collect', async interaction => {
+      if (interaction.user.id !== message.author.id) {
+        return interaction.reply({ content: 'To menu należy do innego gracza.', ephemeral: true });
+      }
+      const nextPage = interaction.customId === `${menuId}:previous`
+        ? pageNumber - 1
+        : interaction.customId === `${menuId}:next`
+          ? pageNumber + 1
+          : Number(interaction.values[0]);
+      if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > totalPages) {
+        return interaction.reply({ content: 'Nieprawidłowy numer strony.', ephemeral: true });
+      }
+      pageNumber = nextPage;
+      try {
+        await interaction.update({
+          embeds: [catalogEmbed(listings, pageNumber, totalPages, character, title, footer)],
+          components: catalogComponents(pageNumber, totalPages, menuId)
+        });
+      } catch (error) {
+        console.error(`Nie udało się zmienić strony menu ${menuId}: ${error.message}`);
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content: `Nie udało się odświeżyć listy. Spróbuj ponownie komendą \`${command}\`.`, ephemeral: true });
+        } else {
+          await interaction.reply({ content: `Nie udało się odświeżyć listy. Spróbuj ponownie komendą \`${command}\`.`, ephemeral: true });
+        }
+      }
+    });
+    collector.on('end', async () => {
+      const disabledComponents = catalogComponents(pageNumber, totalPages, menuId);
+      for (const row of disabledComponents) {
+        for (const component of row.components) component.setDisabled(true);
+      }
+      try {
+        await shopMessage.edit({ components: disabledComponents });
+      } catch (error) {
+        console.error(`Nie udało się wyłączyć nawigacji menu ${menuId}: ${error.message}`);
+      }
+    });
+    return shopMessage;
   }
 
   if (command === '!kup' || command === '!buy') {
-    if (!argument) return message.reply('Użycie: `!kup <id>`; listę znajdziesz w `!sklep`.');
-    const purchase = Rpg.buyItem(character, argument);
+    if (!fullArgument) return message.reply('Użycie: `!kup <nazwa|id>`; listę znajdziesz w `!sklep`.');
+    const purchase = Rpg.buyItem(character, fullArgument);
     if (!purchase.ok) {
+      if (purchase.reason === 'ambiguous') return message.reply(catalogMatchMessage(purchase.matches, Rpg.ITEMS, 'przedmioty'));
       if (purchase.reason === 'level') return message.reply(`Ten rynsztunek wymaga poziomu **${purchase.requiredLevel}**.`);
       if (purchase.reason === 'school') {
         const school = Rpg.WITCHER_SCHOOLS.find(entry => entry.id === purchase.requiredSchool);
@@ -863,12 +975,16 @@ async function handleCommand(message, character) {
   }
 
   if (command === '!sprzedaj') {
-    if (!argument) return message.reply('Użycie: `!sprzedaj <id_przedmiotu|wszystko> [ilość]`; wyceny sprawdzisz w `!sklep`.');
-    const sale = Rpg.sellLoot(character, argument, args[1]);
+    if (!fullArgument) return message.reply('Użycie: `!sprzedaj <nazwa|id|wszystko> [ilość]`; wyceny sprawdzisz w `!skup`.');
+    const hasQuantity = /^\d+$/.test(args[args.length - 1]);
+    const quantity = hasQuantity ? args[args.length - 1] : undefined;
+    const itemName = hasQuantity ? args.slice(0, -1).join(' ') : fullArgument;
+    const sale = Rpg.sellLoot(character, itemName, quantity);
     if (!sale.ok) {
+      if (sale.reason === 'ambiguous') return message.reply(catalogMatchMessage(sale.matches, Rpg.SELLABLE_ITEMS, 'przedmioty do sprzedaży'));
       const errors = {
         empty: 'Nie masz materiałów ani trofeów do sprzedania.',
-        unknown: 'Tego przedmiotu nie przyjmuje skup. Sprawdź `!sklep`.',
+        unknown: 'Tego przedmiotu nie przyjmuje skup. Sprawdź `!skup`.',
         quantity: 'Ilość musi być dodatnią liczbą całkowitą.',
         missing: `Masz tylko ${sale.owned} sztuk tego przedmiotu.`
       };
@@ -883,10 +999,11 @@ async function handleCommand(message, character) {
   }
 
   if (command === '!wyposaz') {
-    if (!argument) return message.reply('Użycie: `!wyposaz <id_przedmiotu>`.');
-    const equipped = Rpg.equipItem(character, argument);
+    if (!fullArgument) return message.reply('Użycie: `!wyposaz <nazwa|id_przedmiotu>`.');
+    const equipped = Rpg.equipItem(character, fullArgument);
     if (!equipped.ok) {
-      if (equipped.reason === 'slots') return message.reply(`Możesz mieć założonych maksymalnie ${equipped.limit} mutagenów. Zdejmij jeden przez \`!zdejmijmutagen <id>\`.`);
+      if (equipped.reason === 'ambiguous') return message.reply(catalogMatchMessage(equipped.matches, Rpg.ITEMS, 'przedmioty'));
+      if (equipped.reason === 'slots') return message.reply(`Możesz mieć założonych maksymalnie ${equipped.limit} mutagenów. Zdejmij jeden przez \`!zdejmijmutagen <nazwa|id>\`.`);
       if (equipped.reason === 'level') return message.reply(`Ten rynsztunek wymaga poziomu **${equipped.requiredLevel}**.`);
       if (equipped.reason === 'school') {
         const school = Rpg.WITCHER_SCHOOLS.find(entry => entry.id === equipped.requiredSchool);
@@ -905,14 +1022,15 @@ async function handleCommand(message, character) {
   }
 
   if (command === '!uzyj' || command === '!use') {
-    if (!argument) return message.reply('Użycie: `!uzyj <id_przedmiotu>`.');
-    const used = Rpg.useItem(character, argument);
+    if (!fullArgument) return message.reply('Użycie: `!uzyj <nazwa|id_przedmiotu>`.');
+    const used = Rpg.useItem(character, fullArgument);
     if (!used.ok) {
+      if (used.reason === 'ambiguous') return message.reply(catalogMatchMessage(used.matches, Rpg.ITEMS, 'przedmioty'));
       const errors = {
         missing: 'Nie masz tego przedmiotu.',
         level: `Ten przedmiot wymaga poziomu **${used.requiredLevel}**.`,
         healthy: 'Masz pełne zdrowie.',
-        equip: `Mutagenów nie używa się jak mikstur. Załóż ten mutagen komendą \`!wyposaz ${argument}\`.`,
+        equip: `Mutagenów nie używa się jak mikstur. Załóż ten mutagen komendą \`!wyposaz ${fullArgument}\`.`,
         unknown: 'Tego przedmiotu nie można użyć.',
         buff_active: `Masz już aktywny eliksir **${used.buffName}**. Wykorzystaj go w walce, zanim użyjesz następnego.`
       };
@@ -991,7 +1109,7 @@ client.on('guildMemberAdd', async member => {
       return;
     }
     await channel.send({
-      content: `Witaj <@${member.id}>! Oto Twoja karta wiedźmina. Wybierz szkołę komendami \`!szkoly\` i \`!szkola <id>\`, a imię zmienisz przez \`!imie <nazwa>\`.`,
+      content: `Witaj <@${member.id}>! Oto Twoja karta wiedźmina. Wybierz szkołę komendami \`!szkoly\` i \`!szkola wilk\` (lub nazwą innej szkoły), a imię zmienisz przez \`!imie <nazwa>\`.`,
       embeds: [createCharacterCard(character, member.user)]
     });
   } catch (error) {
@@ -1003,7 +1121,7 @@ client.on('guildCreate', guild => {
   if (guild.id !== TARGET_GUILD_ID) return;
   const channel = findWelcomeChannel(guild);
   if (!channel) return;
-  channel.send('Wiedźmińskie RPG jest gotowe. Użyj `!wiedzmin`, aby zobaczyć kartę postaci, wybierz szkołę przez `!szkoly` i `!szkola <id>`, a imię zmienisz komendą `!imie <nazwa>`. Każdy gracz ma osobny poziom, ekwipunek i wyprawy.')
+  channel.send('Wiedźmińskie RPG jest gotowe. Użyj `!wiedzmin`, aby zobaczyć kartę postaci, wybierz szkołę przez `!szkoly` i `!szkola wilk` (lub nazwą innej szkoły), a imię zmienisz komendą `!imie <nazwa>`. Każdy gracz ma osobny poziom, ekwipunek i wyprawy.')
     .catch(error => console.error(`Nie udało się wysłać powitania serwera: ${error.message}`));
 });
 

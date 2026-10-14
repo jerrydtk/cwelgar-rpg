@@ -5,24 +5,32 @@ Bot RPG na Discordzie z osobną postacią dla każdego użytkownika. Postacie zd
 ## Komendy
 
 - `!wiedzmin` - profil postaci, poziom, zdrowie, korony i aktywna wyprawa
-- `!szkoly` i `!szkola <id>` - wybierz jedną z sześciu wiedźmińskich szkół
+- `!szkoly` i `!szkola <nazwa|id>` - wybierz jedną z sześciu wiedźmińskich szkół (np. `!szkola wilk`)
 - `!imie <nazwa>` - nazwij swoją postać
 - `!misje` - informacje o losowych kontraktach dla poziomów 1-50
 - `!misja` - przyjęcie losowego kontraktu dopasowanego do poziomu; trzy ostatnie zlecenia nie powtarzają się, a czas wynosi losowo 80-120% czasu bazowego
 - `!polowanie [strona]` - 20 wypraw (od 2 do 30 godzin) ze statusem poziomu i poprzedniego etapu
 - `!polowanie <id>` - wyprawa z łupem i XP; kolejne etapy odblokowują się po pokonaniu bossa poprzedniej wyprawy
-- `!ekwipunek` - plecak i założony sprzęt
-- `!sklep [strona]` i `!kup <id>` - zakupy oraz ceny trofeów
-- `!sprzedaj <id|wszystko> [ilość]` - sprzedaj materiały z misji i wypraw oraz trofea
-- `!wyposaz <id>`, `!mutageny`, `!zdejmijmutagen <id>` i `!uzyj <id>` - sprzęt, maksymalnie sześć mutagenów i mikstury
-- `!zielarstwo [status]` - zbieraj zioła co 30 minut i rozwijaj umiejętność do poziomu 5
-- `!alchemia` (`!receptury`) i `!wytworz <id>` - katalog receptur, stan składników i wytwarzanie mikstur oraz mutagenów
+- `!ekwipunek` - plecak, miecz stalowy, miecz srebrny i założony pancerz
+- `!sklep [strona]` i `!kup <nazwa|id>` - katalog przedmiotów do kupienia
+- `!skup [strona]` i `!sprzedaj <nazwa|id|wszystko> [ilość]` - ceny materiałów i trofeów oraz ich sprzedaż
+- `!sprzedaj <nazwa|id|wszystko> [ilość]` - sprzedaj materiały z misji i wypraw oraz trofea
+- `!wyposaz <nazwa|id>`, `!mutageny`, `!zdejmijmutagen <nazwa|id>` i `!uzyj <nazwa|id>` - sprzęt, maksymalnie sześć mutagenów i mikstury
+- `!zielarstwo` - wyślij wiedźmina na 15-minutowe zbiory; po powrocie otrzymasz zioła i XP (odnowienie zbiorów co 30 minut)
+- `!zielarstwo status` - sprawdź poziom zielarstwa i czas do kolejnych zbiorów
+- `!alchemia` (`!receptury`) i `!wytworz <nazwa|id>` - katalog receptur, stan składników i wytwarzanie mikstur oraz mutagenów
 - `!arena @gracz` - wyzwij gracza z tego serwera na trzyturowy pojedynek; raz na 2 godziny pojedynek z tą samą osobą jest rankingowy, kolejne są towarzyskie
 - `!arena ranking` - ranking PvP według rankingu ELO
 - `!ranking [xp|pvp|wyprawy|korony]` - ranking serwera według progresji, walk PvP, ukończonych wypraw lub koron; `!top` jest skrótem do rankingu XP
 - `!pomoc` - pomoc w kanale Discord
 
-Nowa postać otrzymuje jednorazowo 150 koron oraz stalowy i srebrny miecz. Sklep oferuje przedmioty ogólne i rynsztunki sześciu szkół na poziomach do 50. Wymagany poziom i szkoła obowiązują przy zakupie oraz zakładaniu sprzętu. Poza aktywną wyprawą zdrowie regeneruje się w tempie 0,5 PŻ na minutę do maksimum 100 PŻ; podczas wyprawy regeneracja jest wstrzymana. Zielarstwo pozwala co 30 minut zebrać 2-4 zioła alchemiczne. Wraz z kolejnymi poziomami (maks. 5) pojawia się szansa na korzeń mandragory, glistnik, werbenę, oko kruka i tojad. Składniki otwierają dodatkowe przepisy, m.in. Napar z mandragory do leczenia oraz eliksiry Kocie Oko, Wywar Leśny, Czarna Krew i Biała Mewa wzmacniające następne starcie. Część receptur wymaga odpowiedniego poziomu zielarstwa.
+Nowa postać otrzymuje jednorazowo 150 koron oraz stalowy i srebrny miecz. Sklep oferuje przedmioty ogólne i rynsztunki sześciu szkół na poziomach do 50. Wymagany poziom i szkoła obowiązują przy zakupie oraz zakładaniu sprzętu. Poza aktywną wyprawą zdrowie regeneruje się w tempie 0,5 PŻ na minutę do maksimum 100 PŻ; podczas aktywności regeneracja jest wstrzymana. Zielarstwo pozwala wysłać wiedźmina na 15-minutowe zbiory, po których automatycznie wraca z 2-4 ziołami alchemicznymi i XP; ponowne zbiory są możliwe co 30 minut od rozpoczęcia. Wraz z kolejnymi poziomami (maks. 5) pojawia się szansa na korzeń mandragory, glistnik, werbenę, oko kruka i tojad. Składniki otwierają dodatkowe przepisy, m.in. Napar z mandragory do leczenia oraz eliksiry Kocie Oko, Wywar Leśny, Czarna Krew i Biała Mewa wzmacniające następne starcie. Część receptur wymaga odpowiedniego poziomu zielarstwa.
+
+Postać ma osobne sloty na miecz stalowy i srebrny. Stalowy wybierany jest przeciw ludziom i wilkom, srebrny przeciw znanym potworom; przy przeciwniku mieszanym lub nierozpoznanym bot używa miecza o lepszych statystykach, nie sumując bonusów z obu. Starsze postacie migrują automatycznie: obecnie założony miecz trafia do właściwego slotu, a drugi jest uzupełniany z posiadanego ekwipunku, jeśli postać go ma.
+
+Szkoła Gryfa łączy niewielkie premie do ataku i obrony z dodatkowym 0,1 PŻ regeneracji na minutę poza wyprawami. Szkoła Mantikory daje +2 do ataku, +1 do obrony i zwiększa leczenie miksturami o 5%, bez dodatkowych premii do rynsztunku. Premie szkół są widoczne przy wyborze w `!szkoly`.
+
+Przedmioty i przepisy można wskazywać po pełnej nazwie albo ID; wielkość liter, polskie znaki i spacje nie mają znaczenia. Jeśli nazwa pasuje do kilku pozycji, bot wyświetli pasujące ID do jednoznacznego wyboru. `!sklep [strona]` pokazuje wyłącznie ofertę zakupową, a `!skup [strona]` cennik skupu. Oba katalogi mają osobne przyciski i menu stron; interaktywne menu działa przez 10 minut i jest przypisane do osoby, która je otworzyła.
 
 Za ukończone kontrakty i wyprawy zdobywa się doświadczenie; porażka daje tylko 10% bazowego XP. Awans wymaga 100 XP na poziom 2, a próg rośnie o 50 XP z każdym kolejnym poziomem. Do poziomu 50 potrzeba łącznie 63 700 XP. Po osiągnięciu poziomu 50 dalsze XP nie podnosi poziomu, ale korony i łup nadal są przyznawane.
 

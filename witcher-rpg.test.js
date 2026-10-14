@@ -57,6 +57,28 @@ const restedCharacter = Rpg.ensureCharacter({ witcher: {
 assert.strictEqual(restedCharacter.health, 81);
 assert.strictEqual(restedCharacter.lastHealthUpdateAt, 121000);
 assert.strictEqual(Rpg.HEALTH_REGEN_PER_MINUTE, 0.5);
+const griffinSchool = Rpg.WITCHER_SCHOOLS.find(school => school.id === 'gryfa');
+const manticoreSchool = Rpg.WITCHER_SCHOOLS.find(school => school.id === 'mantikory');
+assert.deepStrictEqual(
+  [griffinSchool.attack, griffinSchool.defense, griffinSchool.healthRegenBonus],
+  [1, 2, 0.1]
+);
+assert.deepStrictEqual(
+  [manticoreSchool.attack, manticoreSchool.defense, manticoreSchool.critChance, manticoreSchool.healingBonus],
+  [2, 1, 0, 0.05]
+);
+const griffinRestedCharacter = Rpg.ensureCharacter({ witcher: {
+  coins: 150,
+  level: 1,
+  health: 80,
+  lastHealthUpdateAt: 1000,
+  school: 'gryfa',
+  inventory: {},
+  equipment: {},
+  starterKitGranted: true,
+  activeActivity: null
+} }, undefined, 121000);
+assert.strictEqual(griffinRestedCharacter.health, 81.2);
 
 const restingDuringActivity = Rpg.ensureCharacter({ witcher: {
   coins: 150,
@@ -73,29 +95,38 @@ assert.strictEqual(restingDuringActivity.health, 80);
 assert.strictEqual(restingDuringActivity.lastHealthUpdateAt, 1000);
 
 const herbalGatherer = selectedCharacter();
-const firstGather = Rpg.gatherHerbs(herbalGatherer, 10000, () => 0);
+const firstGather = Rpg.startHerbGathering(herbalGatherer, 10000);
 assert.strictEqual(firstGather.ok, true);
-assert.deepStrictEqual(firstGather.herbs, [
+assert.strictEqual(firstGather.duration, 15 * 60 * 1000);
+assert.deepStrictEqual(herbalGatherer.inventory, {
+  srebrny_miecz: 1,
+  miecz_stalowy: 1
+});
+assert.strictEqual(Rpg.startHerbGathering(herbalGatherer, 10001).reason, 'busy');
+assert.strictEqual(Rpg.completeActivity(herbalGatherer, firstGather.finishesAt - 1), null);
+const gatheredHerbs = Rpg.completeActivity(herbalGatherer, firstGather.finishesAt, () => 0);
+assert.deepStrictEqual(gatheredHerbs.herbs, [
   { id: 'ziola', count: 2 },
   { id: 'korzen_mandragory', count: 1 }
 ]);
 assert.strictEqual(herbalGatherer.inventory.ziola, 2);
 assert.strictEqual(herbalGatherer.inventory.korzen_mandragory, 1);
-assert.strictEqual(Rpg.gatherHerbs(herbalGatherer, 10001).reason, 'cooldown');
+assert.strictEqual(Rpg.startHerbGathering(herbalGatherer, firstGather.finishesAt + 1).reason, 'cooldown');
 assert.strictEqual(
   Rpg.getHerbalismStatus(herbalGatherer, 10000 + Rpg.HERBALISM_COOLDOWN).cooldownRemaining,
   0
 );
 herbalGatherer.inventory.ziola++;
-assert.strictEqual(Rpg.craftItem(herbalGatherer, 'napar_mandragory').ok, true);
+assert.strictEqual(Rpg.craftItem(herbalGatherer, Rpg.CRAFTING_RECIPES.napar_mandragory.name).ok, true);
 herbalGatherer.health = 50;
-assert.strictEqual(Rpg.useItem(herbalGatherer, 'napar_mandragory').health, 95);
+assert.strictEqual(Rpg.useItem(herbalGatherer, Rpg.ITEMS.napar_mandragory.name).health, 95);
 assert.strictEqual(Rpg.craftItem(herbalGatherer, 'wywar_lesny').reason, 'herbalism');
 
 const masterHerbalist = selectedCharacter();
 masterHerbalist.herbalism.level = Rpg.HERBALISM_MAX_LEVEL;
-const masterGather = Rpg.gatherHerbs(masterHerbalist, 10000, () => 0);
-assert.deepStrictEqual(masterGather.herbs, [
+const masterGather = Rpg.startHerbGathering(masterHerbalist, 10000);
+const masterGatherResult = Rpg.completeActivity(masterHerbalist, masterGather.finishesAt, () => 0);
+assert.deepStrictEqual(masterGatherResult.herbs, [
   { id: 'ziola', count: 2 },
   { id: 'korzen_mandragory', count: 1 },
   { id: 'glistnik', count: 1 },
@@ -119,15 +150,23 @@ for (const itemId of ['wywar_lesny', 'czarna_krew', 'biala_mewa']) {
   assert.strictEqual(Rpg.useItem(masterHerbalist, itemId).ok, true);
   masterHerbalist.combatBuff = null;
 }
+const manticoreHealer = selectedCharacter();
+manticoreHealer.school = 'mantikory';
+manticoreHealer.health = 50;
+manticoreHealer.inventory.jaskolka = 1;
+assert.strictEqual(Rpg.useItem(manticoreHealer, 'jaskolka').healed, 37);
+assert.strictEqual(manticoreHealer.health, 87);
 
 const herbalistInTheField = selectedCharacter();
 herbalistInTheField.activeActivity = { kind: 'hunt', activityId: 'bory', finishesAt: 2000000 };
-assert.strictEqual(Rpg.gatherHerbs(herbalistInTheField, 10000).reason, 'busy');
+assert.strictEqual(Rpg.startHerbGathering(herbalistInTheField, 10000).reason, 'busy');
 
 const progressingHerbalist = selectedCharacter();
 for (let harvest = 0; harvest < 4; harvest++) {
   const harvestTime = 1000 + harvest * Rpg.HERBALISM_COOLDOWN;
-  assert.strictEqual(Rpg.gatherHerbs(progressingHerbalist, harvestTime, () => 0.99).ok, true);
+  const gathering = Rpg.startHerbGathering(progressingHerbalist, harvestTime);
+  assert.strictEqual(gathering.ok, true);
+  assert.strictEqual(Rpg.completeActivity(progressingHerbalist, gathering.finishesAt, () => 0.99).kind, 'herbalism');
 }
 assert.deepStrictEqual(progressingHerbalist.herbalism, {
   level: 2,
@@ -146,17 +185,61 @@ assert.strictEqual(first.coins, 150);
 assert.strictEqual(first.inventory.srebrny_miecz, 1);
 assert.strictEqual(first.inventory.miecz_stalowy, 1);
 assert.strictEqual(first.equipment.weapon, 'miecz_stalowy');
+assert.strictEqual(first.equipment.steelWeapon, 'miecz_stalowy');
+assert.strictEqual(first.equipment.silverWeapon, 'srebrny_miecz');
 assert.strictEqual(first.starterKitGranted, true);
 Rpg.ensureCharacter({ witcher: first });
 assert.strictEqual(first.coins, 150);
 assert.strictEqual(first.inventory.srebrny_miecz, 1);
 assert.strictEqual(first.inventory.miecz_stalowy, 1);
+const migratedSwordsman = Rpg.ensureCharacter({ witcher: {
+  name: 'Stary profil',
+  coins: 500,
+  xp: 0,
+  level: 5,
+  health: 100,
+  school: 'wilczej_szkoly',
+  inventory: { miecz_stalowy: 1, srebrny_miecz: 1 },
+  equipment: { weapon: 'miecz_stalowy', armor: null },
+  starterKitGranted: true,
+  activeActivity: null
+} });
+assert.strictEqual(migratedSwordsman.equipment.steelWeapon, 'miecz_stalowy');
+assert.strictEqual(migratedSwordsman.equipment.silverWeapon, 'srebrny_miecz');
+assert.strictEqual(Rpg.selectCombatWeapon(migratedSwordsman, 'wilki'), Rpg.ITEMS.miecz_stalowy);
+assert.strictEqual(Rpg.selectCombatWeapon(migratedSwordsman, 'humans'), Rpg.ITEMS.miecz_stalowy);
+assert.strictEqual(Rpg.selectCombatWeapon(migratedSwordsman, 'nekkerzy'), Rpg.ITEMS.srebrny_miecz);
+assert.strictEqual(Rpg.selectCombatWeapon(migratedSwordsman, null), Rpg.ITEMS.srebrny_miecz);
+migratedSwordsman.equipment.steelWeapon = 'miecz_stalowy_legendarny';
+migratedSwordsman.equipment.weapon = 'miecz_stalowy_legendarny';
+assert.strictEqual(Rpg.selectCombatWeapon(migratedSwordsman, null), Rpg.ITEMS.miecz_stalowy_legendarny);
+assert.strictEqual(Rpg.selectCombatWeapon(migratedSwordsman, 'nekkerzy'), Rpg.ITEMS.srebrny_miecz);
+const silverEquippedProfile = Rpg.ensureCharacter({ witcher: {
+  name: 'Srebrny profil',
+  coins: 500,
+  xp: 0,
+  level: 5,
+  health: 100,
+  school: 'wilczej_szkoly',
+  inventory: { miecz_stalowy: 1, miecz_stalowy_kaedwenski: 1 },
+  equipment: { weapon: 'miecz_srebrny_mahakamski', armor: null },
+  starterKitGranted: true,
+  activeActivity: null
+} });
+assert.strictEqual(silverEquippedProfile.equipment.silverWeapon, 'miecz_srebrny_mahakamski');
+assert.strictEqual(silverEquippedProfile.equipment.steelWeapon, 'miecz_stalowy_kaedwenski');
+assert.strictEqual(Rpg.equipItem(silverEquippedProfile, 'miecz_stalowy_kaedwenski').ok, true);
+assert.strictEqual(silverEquippedProfile.equipment.steelWeapon, 'miecz_stalowy_kaedwenski');
+assert.strictEqual(silverEquippedProfile.equipment.silverWeapon, 'miecz_srebrny_mahakamski');
 assert.strictEqual(Rpg.startActivity(first, 'mission', 'gosciniec').reason, 'school');
 assert.strictEqual(Rpg.buyItem(first, 'srebrny_miecz').reason, 'school');
 assert.strictEqual(Rpg.chooseSchool(first, 'nieistniejaca').reason, 'unknown');
 assert.strictEqual(Rpg.chooseSchool(first, 'wilczej_szkoly').ok, true);
 assert.strictEqual(Rpg.chooseSchool(first, 'gryfa').reason, 'chosen');
 assert.strictEqual(Rpg.chooseSchool(second, 'kota').ok, true);
+const wolfSchoolChooser = Rpg.ensureCharacter({});
+assert.strictEqual(Rpg.chooseSchool(wolfSchoolChooser, 'wilk').school.id, 'wilczej_szkoly');
+assert.strictEqual(Rpg.chooseSchool(Rpg.ensureCharacter({}), 'Szkoła Wilka').school.id, 'wilczej_szkoly');
 assert.strictEqual(first.coins, 150);
 assert.strictEqual(firstUser.coins, 12);
 first.coins += 10;
@@ -534,6 +617,19 @@ first.health = 50;
 first.coins += 35;
 assert.strictEqual(Rpg.buyItem(first, 'jaskolka').ok, true);
 assert.strictEqual(Rpg.useItem(first, 'jaskolka').health, 85);
+const namedBuyer = selectedCharacter({ witcher: { coins: 10000, level: 1 } });
+const steelSwordName = Rpg.ITEMS.miecz_stalowy_kaedwenski.name
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/ł/g, 'l')
+  .toUpperCase();
+assert.strictEqual(Rpg.buyItem(namedBuyer, steelSwordName).ok, true);
+assert.strictEqual(namedBuyer.inventory.miecz_stalowy_kaedwenski, 1);
+assert.strictEqual(Rpg.equipItem(namedBuyer, Rpg.ITEMS.miecz_stalowy_kaedwenski.name).ok, true);
+assert.strictEqual(Rpg.resolveCatalogId('Ten sam', {
+  first_item: { name: 'Ten sam' },
+  second_item: { name: 'Ten sam' }
+}).reason, 'ambiguous');
 
 const lockedCharacter = Rpg.ensureCharacter({ witcher: { name: 'Nowicjusz', coins: 10000, xp: 0, level: 4, health: 100, inventory: {}, equipment: { weapon: null, armor: null }, activeActivity: null } });
 assert.strictEqual(lockedCharacter.school, 'wilczej_szkoly');
@@ -559,6 +655,7 @@ const singleSale = Rpg.sellLoot(seller, 'trofeum_gryfa', 1);
 assert.strictEqual(singleSale.gold, Rpg.TROPHIES.trofeum_gryfa.price);
 assert.strictEqual(seller.inventory.trofeum_gryfa, 1);
 assert.strictEqual(seller.inventory.wilcza_skora, 4);
+assert.strictEqual(Rpg.sellLoot(seller, 'Wilcza skora', 1).sold[0].id, 'wilcza_skora');
 const uniqueDropSale = Rpg.sellLoot(seller, 'list_przewozowy', 1);
 assert.strictEqual(uniqueDropSale.gold, 8);
 assert.strictEqual(seller.inventory.list_przewozowy, 1);
@@ -568,15 +665,16 @@ assert.strictEqual(seller.inventory.trofeum_gryfa, 0);
 assert.strictEqual(seller.inventory.list_przewozowy, 0);
 assert.strictEqual(seller.inventory.wilcza_skora, 0);
 
-const armed = Rpg.ensureCharacter({ witcher: { name: 'Łowca', coins: 0, xp: 0, level: 1, health: 100, inventory: {}, equipment: { weapon: 'srebrny_miecz', armor: null }, activeActivity: null } });
+const armed = Rpg.ensureCharacter({ witcher: { name: 'Łowca', coins: 0, xp: 0, level: 1, health: 100, inventory: {}, equipment: { weapon: 'srebrny_miecz', armor: null }, starterKitGranted: true, activeActivity: null } });
 const armedTrip = Rpg.startActivity(armed, 'mission', 'gosciniec', 10000);
 const armedResult = Rpg.completeActivity(armed, armedTrip.finishesAt, () => 0);
 assert.strictEqual(armedResult.victory, true);
 assert.ok(armedResult.loot.includes('trofeum_nekker'));
-const unarmed = Rpg.ensureCharacter({ witcher: { name: 'Rekrut', coins: 0, xp: 0, level: 1, health: 100, inventory: {}, equipment: { weapon: null, armor: null }, activeActivity: null } });
+const unarmed = Rpg.ensureCharacter({ witcher: { name: 'Rekrut', coins: 0, xp: 0, level: 1, health: 100, inventory: {}, equipment: { weapon: null, armor: null }, starterKitGranted: true, activeActivity: null } });
 const unarmedTrip = Rpg.startActivity(unarmed, 'mission', 'gosciniec', 10000);
 const unarmedResult = Rpg.completeActivity(unarmed, unarmedTrip.finishesAt, () => 0);
-assert.ok(armedResult.damageDealt > unarmedResult.damageDealt);
+assert.strictEqual(Rpg.selectCombatWeapon(armed, 'nekkerzy'), Rpg.ITEMS.srebrny_miecz);
+assert.strictEqual(Rpg.selectCombatWeapon(unarmed, 'nekkerzy'), undefined);
 
 const armored = Rpg.ensureCharacter({ witcher: { name: 'Twardziel', coins: 0, xp: 0, level: 1, health: 100, inventory: {}, equipment: { weapon: null, armor: 'zbroja_kaedwen' }, activeActivity: null } });
 const armoredTrip = Rpg.startActivity(armored, 'mission', 'upiory', 20000);
