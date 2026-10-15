@@ -621,6 +621,11 @@ function resolveCatalogId(input, catalog, aliases = {}) {
     .map(([id]) => id);
   if (matches.length === 1) return { ok: true, id: matches[0] };
   if (matches.length > 1) return { ok: false, reason: 'ambiguous', matches };
+  const prefixMatches = entries
+    .filter(([, entry]) => typeof entry.name === 'string' && normalizeCatalogInput(entry.name).startsWith(`${lookup} `))
+    .map(([id]) => id);
+  if (prefixMatches.length === 1) return { ok: true, id: prefixMatches[0] };
+  if (prefixMatches.length > 1) return { ok: false, reason: 'ambiguous', matches: prefixMatches };
   return { ok: false, reason: 'unknown' };
 }
 
@@ -684,7 +689,12 @@ for (const drop of Object.values(MISSION_DROPS)) {
   LOOT_VALUES[drop.id] = { name: drop.name, price: drop.price };
 }
 
-const SELLABLE_ITEMS = { ...TROPHIES, ...LOOT_VALUES };
+const SELLABLE_EQUIPMENT = Object.fromEntries(
+  Object.entries(ITEMS)
+    .filter(([, item]) => item.type === 'equipment')
+    .map(([id, item]) => [id, { name: item.name, price: Math.floor(item.price / 2) }])
+);
+const SELLABLE_ITEMS = { ...TROPHIES, ...LOOT_VALUES, ...SELLABLE_EQUIPMENT };
 
 const MONSTER_TROPHIES = {
   wilki: 'trofeum_wilka',
@@ -1487,11 +1497,13 @@ function sellLoot(character, itemId, quantity) {
   if (normalizedInput === 'wszystko' || normalizedInput === 'all') {
     const sold = [];
     let gold = 0;
+    const equippedItems = new Set(Object.values(character.equipment || {}).filter(Boolean));
     for (const [id, item] of Object.entries(SELLABLE_ITEMS)) {
-      const count = character.inventory[id] || 0;
+      const owned = character.inventory[id] || 0;
+      const count = Math.max(0, owned - Number(equippedItems.has(id)));
       if (count < 1) continue;
       const value = count * item.price;
-      character.inventory[id] = 0;
+      character.inventory[id] -= count;
       gold += value;
       sold.push({ id, count, gold: value });
     }
@@ -1505,9 +1517,14 @@ function sellLoot(character, itemId, quantity) {
   itemId = resolution.id;
   const item = SELLABLE_ITEMS[itemId];
   const owned = character.inventory[itemId] || 0;
-  const amount = quantity === undefined ? owned : Number(quantity);
+  const equipped = Object.values(character.equipment || {}).includes(itemId);
+  const sellable = Math.max(0, owned - Number(equipped));
+  const amount = quantity === undefined ? (sellable || owned) : Number(quantity);
   if (!Number.isInteger(amount) || amount < 1) return { ok: false, reason: 'quantity' };
   if (owned < amount) return { ok: false, reason: 'missing', owned };
+  if (equipped && owned - 1 < amount) {
+    return { ok: false, reason: 'equipped' };
+  }
 
   const gold = amount * item.price;
   character.inventory[itemId] -= amount;

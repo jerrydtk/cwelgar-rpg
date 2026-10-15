@@ -13,8 +13,7 @@ Bot RPG na Discordzie z osobną postacią dla każdego użytkownika. Postacie zd
 - `!polowanie <id>` - wyprawa z łupem i XP; kolejne etapy odblokowują się po pokonaniu bossa poprzedniej wyprawy
 - `!ekwipunek` - plecak, miecz stalowy, miecz srebrny i założony pancerz
 - `!sklep [strona]` i `!kup <nazwa|id>` - katalog przedmiotów do kupienia
-- `!skup [strona]` i `!sprzedaj <nazwa|id|wszystko> [ilość]` - ceny materiałów i trofeów oraz ich sprzedaż
-- `!sprzedaj <nazwa|id|wszystko> [ilość]` - sprzedaj materiały z misji i wypraw oraz trofea
+- `!skup [strona]` i `!sprzedaj <nazwa|id|wszystko> [ilość]` - kowal skupuje materiały, trofea oraz niezałożone bronie i pancerze
 - `!wyposaz <nazwa|id>`, `!mutageny`, `!zdejmijmutagen <nazwa|id>` i `!uzyj <nazwa|id>` - sprzęt, maksymalnie sześć mutagenów i mikstury
 - `!zielarstwo` - wyślij wiedźmina na 15-minutowe zbiory; po powrocie otrzymasz zioła i XP (odnowienie zbiorów co 30 minut)
 - `!zielarstwo status` - sprawdź poziom zielarstwa i czas do kolejnych zbiorów
@@ -30,7 +29,7 @@ Postać ma osobne sloty na miecz stalowy i srebrny. Stalowy wybierany jest przec
 
 Szkoła Gryfa łączy niewielkie premie do ataku i obrony z dodatkowym 0,1 PŻ regeneracji na minutę poza wyprawami. Szkoła Mantikory daje +2 do ataku, +1 do obrony i zwiększa leczenie miksturami o 5%, bez dodatkowych premii do rynsztunku. Premie szkół są widoczne przy wyborze w `!szkoly`.
 
-Przedmioty i przepisy można wskazywać po pełnej nazwie albo ID; wielkość liter, polskie znaki i spacje nie mają znaczenia. Jeśli nazwa pasuje do kilku pozycji, bot wyświetli pasujące ID do jednoznacznego wyboru. `!sklep [strona]` pokazuje wyłącznie ofertę zakupową, a `!skup [strona]` cennik skupu. Oba katalogi mają osobne przyciski i menu stron; interaktywne menu działa przez 10 minut i jest przypisane do osoby, która je otworzyła.
+Przedmioty i przepisy można wskazywać po pełnej nazwie albo ID; wielkość liter, polskie znaki i spacje nie mają znaczenia. W komendach obsługujących nazwy wystarczy też wpisać początek nazwy, np. `!sprzedaj temerska`; jeśli pasuje kilka pozycji, bot wyświetli pasujące ID do jednoznacznego wyboru. Kowal odkupuje broń i pancerze za połowę ceny sklepowej, ale nie przyjmuje aktualnie założonego sprzętu. `!sklep [strona]` pokazuje ofertę zakupową, a `!skup [strona]` ceny materiałów, trofeów i sprzętu. Oba katalogi mają osobne przyciski i menu stron; interaktywne menu działa przez 10 minut i jest przypisane do osoby, która je otworzyła.
 
 Za ukończone kontrakty i wyprawy zdobywa się doświadczenie; porażka daje tylko 10% bazowego XP. Awans wymaga 100 XP na poziom 2, a próg rośnie o 50 XP z każdym kolejnym poziomem. Do poziomu 50 potrzeba łącznie 63 700 XP. Po osiągnięciu poziomu 50 dalsze XP nie podnosi poziomu, ale korony i łup nadal są przyznawane.
 

@@ -594,12 +594,12 @@ async function handleCommand(message, character) {
         },
         {
           name: '3. Sprawdź ekwipunek i przygotuj się',
-          value: '`!ekwipunek` — zobacz plecak oraz założone miecze i zbroję.\n`!sklep` — przeglądaj przedmioty do kupienia; `!skup` — ceny materiałów i trofeów. `!kup <nazwa|id>` — kup przedmiot, `!wyposaz <nazwa|id>` — załóż broń, zbroję lub mutagen. Miecze stalowe służą przeciw ludziom i wilkom, srebrne przeciw potworom.\n`!uzyj <nazwa|id>` — użyj mikstury albo przygotuj eliksir na następną walkę.\n`!mutageny` pokazuje maksymalnie 6 założonych mutagenów; zdejmiesz je przez `!zdejmijmutagen <nazwa|id>`. Przy niejednoznacznej nazwie bot poda pasujące ID.',
+          value: '`!ekwipunek` — zobacz plecak oraz założone miecze i zbroję.\n`!sklep` — przeglądaj przedmioty do kupienia; `!skup` — ceny materiałów, trofeów i sprzętu. `!kup <nazwa|id>` — kup przedmiot, `!wyposaz <nazwa|id>` — załóż broń, zbroję lub mutagen. Miecze stalowe służą przeciw ludziom i wilkom, srebrne przeciw potworom.\n`!uzyj <nazwa|id>` — użyj mikstury albo przygotuj eliksir na następną walkę.\n`!mutageny` pokazuje maksymalnie 6 założonych mutagenów; zdejmiesz je przez `!zdejmijmutagen <nazwa|id>`. Przy niejednoznacznej nazwie bot poda pasujące ID.',
           inline: false
         },
         {
           name: '4. Zbieraj, wytwarzaj i zarabiaj',
-          value: '`!zielarstwo` — wyślij wiedźmina na 15-minutowe zbiory; zioła i XP dostaniesz po powrocie. `!zielarstwo status` — sprawdź zielarstwo i odnowienie. `!alchemia` — zobacz receptury i posiadane składniki; `!wytworz <nazwa|id_przepisu>` — przygotuj miksturę lub mutagen.\nMateriały i trofea zdobywasz też podczas przygód. `!skup` pokazuje ceny. `!sprzedaj <nazwa|id> [ilość]` — sprzedaj wybrane materiały; `!sprzedaj wszystko` — sprzedaj cały skupowalny łup.',
+          value: '`!zielarstwo` — wyślij wiedźmina na 15-minutowe zbiory; zioła i XP dostaniesz po powrocie. `!zielarstwo status` — sprawdź zielarstwo i odnowienie. `!alchemia` — zobacz receptury i posiadane składniki; `!wytworz <nazwa|id_przepisu>` — przygotuj miksturę lub mutagen.\nMateriały i trofea zdobywasz też podczas przygód. `!sprzedaj <początek nazwy|id> [ilość]` — sprzedaj łup lub niezałożony sprzęt; broń i pancerze kowal odkupuje za połowę ceny sklepowej. `!sprzedaj wszystko` — sprzedaj cały skupowalny łup i niezałożony sprzęt.',
           inline: false
         },
         {
@@ -895,9 +895,9 @@ async function handleCommand(message, character) {
     const isPawnShop = command === '!skup';
     const listings = isPawnShop ? saleListings : itemListings;
     const menuId = isPawnShop ? 'pawnshop' : 'shop';
-    const title = isPawnShop ? '🪙 Skup materiałów i trofeów' : '🛒 Sklep';
+    const title = isPawnShop ? '⚒️ Kowal i skup łupów' : '🛒 Sklep';
     const footer = isPawnShop
-      ? 'Sprzedaj: !sprzedaj <nazwa|id|wszystko> [ilość]'
+      ? 'Sprzedaj: !sprzedaj <początek nazwy|id|wszystko> [ilość] · sprzęt za połowę ceny'
       : 'Kup: !kup <nazwa|id>';
     const pageSize = 12;
     const totalPages = Math.ceil(listings.length / pageSize);
@@ -975,7 +975,7 @@ async function handleCommand(message, character) {
   }
 
   if (command === '!sprzedaj') {
-    if (!fullArgument) return message.reply('Użycie: `!sprzedaj <nazwa|id|wszystko> [ilość]`; wyceny sprawdzisz w `!skup`.');
+    if (!fullArgument) return message.reply('Użycie: `!sprzedaj <początek nazwy|id|wszystko> [ilość]`; kowala i cennik znajdziesz w `!skup`.');
     const hasQuantity = /^\d+$/.test(args[args.length - 1]);
     const quantity = hasQuantity ? args[args.length - 1] : undefined;
     const itemName = hasQuantity ? args.slice(0, -1).join(' ') : fullArgument;
@@ -983,12 +983,13 @@ async function handleCommand(message, character) {
     if (!sale.ok) {
       if (sale.reason === 'ambiguous') return message.reply(catalogMatchMessage(sale.matches, Rpg.SELLABLE_ITEMS, 'przedmioty do sprzedaży'));
       const errors = {
-        empty: 'Nie masz materiałów ani trofeów do sprzedania.',
-        unknown: 'Tego przedmiotu nie przyjmuje skup. Sprawdź `!skup`.',
+        empty: 'Nie masz łupów ani niezałożonego sprzętu do sprzedania.',
+        unknown: 'Kowal nie skupuje tego przedmiotu. Sprawdź `!skup`.',
         quantity: 'Ilość musi być dodatnią liczbą całkowitą.',
-        missing: `Masz tylko ${sale.owned} sztuk tego przedmiotu.`
+        missing: `Masz tylko ${sale.owned} sztuk tego przedmiotu.`,
+        equipped: 'Nie możesz sprzedać założonego przedmiotu. Najpierw załóż inny sprzęt.'
       };
-      return message.reply(errors[sale.reason] || 'Nie udało się sprzedać trofeum.');
+      return message.reply(errors[sale.reason] || 'Nie udało się sprzedać przedmiotu.');
     }
     saveData();
     const sold = sale.sold.map(item => `${Rpg.SELLABLE_ITEMS[item.id].name} ×${item.count}`).join('\n');

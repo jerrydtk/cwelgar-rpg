@@ -630,6 +630,13 @@ assert.strictEqual(Rpg.resolveCatalogId('Ten sam', {
   first_item: { name: 'Ten sam' },
   second_item: { name: 'Ten sam' }
 }).reason, 'ambiguous');
+assert.deepStrictEqual(Rpg.resolveCatalogId('ZERRIKANSKI', {
+  miecz_zerrikanski: { name: 'Zerrikański miecz stalowy' }
+}), { ok: true, id: 'miecz_zerrikanski' });
+assert.deepStrictEqual(Rpg.resolveCatalogId('SREBRNY', {
+  miecz_srebrny: { name: 'Srebrny miecz' },
+  miecz_stalowy: { name: 'Stalowy miecz' }
+}), { ok: true, id: 'miecz_srebrny' });
 
 const lockedCharacter = Rpg.ensureCharacter({ witcher: { name: 'Nowicjusz', coins: 10000, xp: 0, level: 4, health: 100, inventory: {}, equipment: { weapon: null, armor: null }, activeActivity: null } });
 assert.strictEqual(lockedCharacter.school, 'wilczej_szkoly');
@@ -664,6 +671,32 @@ assert.strictEqual(allLootSale.sold.length, 4);
 assert.strictEqual(seller.inventory.trofeum_gryfa, 0);
 assert.strictEqual(seller.inventory.list_przewozowy, 0);
 assert.strictEqual(seller.inventory.wilcza_skora, 0);
+
+const blacksmithSeller = Rpg.ensureCharacter({ witcher: {
+  name: 'Kowalowy klient',
+  coins: 0,
+  xp: 0,
+  level: 1,
+  health: 100,
+  inventory: { miecz_stalowy_kaedwenski: 2, zbroja_temerska_kurtka: 1 },
+  equipment: {
+    weapon: 'miecz_stalowy_kaedwenski',
+    steelWeapon: 'miecz_stalowy_kaedwenski',
+    silverWeapon: null,
+    armor: null
+  },
+  starterKitGranted: true,
+  activeActivity: null
+} });
+assert.strictEqual(Rpg.sellLoot(blacksmithSeller, 'Kaedwenski').gold, Math.floor(Rpg.ITEMS.miecz_stalowy_kaedwenski.price / 2));
+assert.strictEqual(blacksmithSeller.inventory.miecz_stalowy_kaedwenski, 1);
+const armorSale = Rpg.sellLoot(blacksmithSeller, 'TEMERSKA');
+assert.strictEqual(armorSale.sold[0].id, 'zbroja_temerska_kurtka');
+assert.strictEqual(armorSale.gold, Math.floor(Rpg.ITEMS.zbroja_temerska_kurtka.price / 2));
+assert.strictEqual(blacksmithSeller.inventory.zbroja_temerska_kurtka, 0);
+assert.strictEqual(Rpg.sellLoot(blacksmithSeller, 'Kaedwenski').reason, 'equipped');
+assert.strictEqual(Rpg.sellLoot(blacksmithSeller, 'wszystko').reason, 'empty');
+assert.strictEqual(blacksmithSeller.inventory.miecz_stalowy_kaedwenski, 1);
 
 const armed = Rpg.ensureCharacter({ witcher: { name: 'Łowca', coins: 0, xp: 0, level: 1, health: 100, inventory: {}, equipment: { weapon: 'srebrny_miecz', armor: null }, starterKitGranted: true, activeActivity: null } });
 const armedTrip = Rpg.startActivity(armed, 'mission', 'gosciniec', 10000);
