@@ -1400,22 +1400,25 @@ function craftItem(character, recipeId, random = Math.random) {
   return { ok: true, recipe, item, itemId: outputId, count: character.inventory[outputId] };
 }
 
-function buyItem(character, itemId) {
+function buyItem(character, itemId, quantity = 1) {
   const resolution = resolveCatalogId(itemId, ITEMS, ITEM_ALIASES);
   if (!resolution.ok) return resolution;
   itemId = resolution.id;
   const item = ITEMS[itemId];
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return { ok: false, reason: 'quantity' };
   if (item.craftOnly) return { ok: false, reason: 'craft' };
   if (item.school && item.school !== character.school) return { ok: false, reason: 'school', requiredSchool: item.school };
   if (!character.school) return { ok: false, reason: 'school' };
   if (item.school && !character.school) return { ok: false, reason: 'school', requiredSchool: item.school };
   const requiredLevel = item.requiredLevel || 1;
   if (character.level < requiredLevel) return { ok: false, reason: 'level', requiredLevel };
-  if (character.coins < item.price) return { ok: false, reason: 'funds', missing: item.price - character.coins };
+  const totalPrice = item.price * quantity;
+  if (!Number.isSafeInteger(totalPrice)) return { ok: false, reason: 'quantity' };
+  if (character.coins < totalPrice) return { ok: false, reason: 'funds', missing: totalPrice - character.coins };
 
-  character.coins -= item.price;
-  character.inventory[itemId] = (character.inventory[itemId] || 0) + 1;
-  return { ok: true, item, count: character.inventory[itemId] };
+  character.coins -= totalPrice;
+  character.inventory[itemId] = (character.inventory[itemId] || 0) + quantity;
+  return { ok: true, item, count: character.inventory[itemId], quantity, totalPrice };
 }
 
 function equipItem(character, itemId) {

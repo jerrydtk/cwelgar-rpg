@@ -617,6 +617,16 @@ first.health = 50;
 first.coins += 35;
 assert.strictEqual(Rpg.buyItem(first, 'jaskolka').ok, true);
 assert.strictEqual(Rpg.useItem(first, 'jaskolka').health, 85);
+const bulkBuyer = selectedCharacter({ witcher: { coins: 100, level: 1 } });
+bulkBuyer.coins = 100;
+const bulkPurchase = Rpg.buyItem(bulkBuyer, 'jaskolka', 2);
+assert.strictEqual(bulkPurchase.ok, true);
+assert.strictEqual(bulkPurchase.quantity, 2);
+assert.strictEqual(bulkPurchase.totalPrice, Rpg.ITEMS.jaskolka.price * 2);
+assert.strictEqual(bulkBuyer.inventory.jaskolka, 2);
+assert.strictEqual(bulkBuyer.coins, 100 - Rpg.ITEMS.jaskolka.price * 2);
+assert.strictEqual(Rpg.buyItem(bulkBuyer, 'jaskolka', 3).reason, 'funds');
+assert.strictEqual(Rpg.buyItem(bulkBuyer, 'jaskolka', 0).reason, 'quantity');
 const namedBuyer = selectedCharacter({ witcher: { coins: 10000, level: 1 } });
 const steelSwordName = Rpg.ITEMS.miecz_stalowy_kaedwenski.name
   .normalize('NFD')

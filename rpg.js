@@ -121,6 +121,27 @@ function catalogComponents(pageNumber, totalPages, menuId) {
   return [new ActionRowBuilder().addComponents(select), navigation];
 }
 
+function getShopCategory(id, item) {
+  if (item.school) {
+    const schoolIndex = Rpg.WITCHER_SCHOOLS.findIndex(school => school.id === item.school);
+    const school = Rpg.WITCHER_SCHOOLS[schoolIndex];
+    return {
+      order: 2 + schoolIndex,
+      label: `🏰 ${school?.name || 'Innej szkoły'} · rynsztunek`
+    };
+  }
+  if (item.type === 'equipment' && item.slot === 'weapon') {
+    const isSilver = id === 'srebrny_miecz' || id.startsWith('miecz_srebrny_');
+    return { order: isSilver ? 1 : 0, label: isSilver ? '🗡️ Miecze srebrne' : '⚔️ Miecze stalowe' };
+  }
+  if (item.type === 'equipment' && item.slot === 'armor') {
+    return { order: 8, label: '🛡️ Zbroje' };
+  }
+  if (item.mutationBonus) return { order: 10, label: '🧬 Mutageny' };
+  if (item.type === 'consumable') return { order: 9, label: '🧪 Mikstury i eliksiry' };
+  return { order: 11, label: '📦 Pozostałe' };
+}
+
 function createNoticeEmbed(title, description, color = 0x547a46) {
   return new EmbedBuilder()
     .setTitle(title)
@@ -594,7 +615,7 @@ async function handleCommand(message, character) {
         },
         {
           name: '3. Sprawdź ekwipunek i przygotuj się',
-          value: '`!ekwipunek` — zobacz plecak oraz założone miecze i zbroję.\n`!sklep` — przeglądaj przedmioty do kupienia; `!skup` — ceny materiałów, trofeów i sprzętu. `!kup <nazwa|id>` — kup przedmiot, `!wyposaz <nazwa|id>` — załóż broń, zbroję lub mutagen. Miecze stalowe służą przeciw ludziom i wilkom, srebrne przeciw potworom.\n`!uzyj <nazwa|id>` — użyj mikstury albo przygotuj eliksir na następną walkę.\n`!mutageny` pokazuje maksymalnie 6 założonych mutagenów; zdejmiesz je przez `!zdejmijmutagen <nazwa|id>`. Przy niejednoznacznej nazwie bot poda pasujące ID.',
+          value: '`!ekwipunek` — zobacz plecak oraz założone miecze i zbroję.\n`!sklep` — przeglądaj uporządkowane przedmioty do kupienia; `!skup` — ceny materiałów, trofeów i sprzętu. `!kup <nazwa|id> [ilość]` — kup przedmiot, np. `!kup jaskolka 2`; `!wyposaz <nazwa|id>` — załóż broń, zbroję lub mutagen. Miecze stalowe służą przeciw ludziom i wilkom, srebrne przeciw potworom.\n`!uzyj <nazwa|id>` — użyj mikstury albo przygotuj eliksir na następną walkę.\n`!mutageny` pokazuje maksymalnie 6 założonych mutagenów; zdejmiesz je przez `!zdejmijmutagen <nazwa|id>`. Przy niejednoznacznej nazwie bot poda pasujące ID.',
           inline: false
         },
         {
@@ -861,7 +882,16 @@ async function handleCommand(message, character) {
   }
 
   if (command === '!sklep' || command === '!shop' || command === '!skup') {
-    const itemListings = Object.entries(Rpg.ITEMS).filter(([, item]) => !item.craftOnly).map(([id, item]) => {
+    const shopItems = Object.entries(Rpg.ITEMS)
+      .filter(([, item]) => !item.craftOnly)
+      .map(([id, item]) => ({ id, item, category: getShopCategory(id, item) }))
+      .sort((left, right) =>
+        left.category.order - right.category.order ||
+        (left.item.requiredLevel || 1) - (right.item.requiredLevel || 1) ||
+        left.item.price - right.item.price ||
+        left.item.name.localeCompare(right.item.name, 'pl')
+      );
+    const itemListings = shopItems.map(({ id, item, category }) => {
       const requiredLevel = item.requiredLevel ? ` · wymagany poziom ${item.requiredLevel}` : '';
       const schoolRequirement = item.school
         ? item.school === character.school
@@ -882,7 +912,7 @@ async function handleCommand(message, character) {
       }
       const statText = stats.length ? stats.join(' · ') : 'Przedmiot użytkowy';
       return {
-        name: `🛒 ${item.name} · ${item.price} koron`,
+        name: `${category.label} · ${item.name} · ${item.price} koron`,
         value: `ID: \`${id}\`\n${statText}${requiredLevel}${schoolRequirement}`,
         inline: false
       };
@@ -891,14 +921,14 @@ async function handleCommand(message, character) {
       name: `🪙 ${item.name} · skup ${item.price} koron`,
       value: `ID: \`${id}\``,
       inline: true
-    }));
+    })).sort((left, right) => left.name.localeCompare(right.name, 'pl'));
     const isPawnShop = command === '!skup';
     const listings = isPawnShop ? saleListings : itemListings;
     const menuId = isPawnShop ? 'pawnshop' : 'shop';
     const title = isPawnShop ? '⚒️ Kowal i skup łupów' : '🛒 Sklep';
     const footer = isPawnShop
       ? 'Sprzedaj: !sprzedaj <początek nazwy|id|wszystko> [ilość] · sprzęt za połowę ceny'
-      : 'Kup: !kup <nazwa|id>';
+      : 'Kup: !kup <nazwa|id> [ilość], np. !kup jaskolka 2';
     const pageSize = 12;
     const totalPages = Math.ceil(listings.length / pageSize);
     let pageNumber = argument ? Number(argument) : 1;
@@ -955,8 +985,11 @@ async function handleCommand(message, character) {
   }
 
   if (command === '!kup' || command === '!buy') {
-    if (!fullArgument) return message.reply('Użycie: `!kup <nazwa|id>`; listę znajdziesz w `!sklep`.');
-    const purchase = Rpg.buyItem(character, fullArgument);
+    if (!fullArgument) return message.reply('Użycie: `!kup <nazwa|id> [ilość]`; listę znajdziesz w `!sklep`.');
+    const hasQuantity = /^\d+$/.test(args[args.length - 1]);
+    const quantity = hasQuantity ? Number(args[args.length - 1]) : 1;
+    const itemName = hasQuantity ? args.slice(0, -1).join(' ') : fullArgument;
+    const purchase = Rpg.buyItem(character, itemName, quantity);
     if (!purchase.ok) {
       if (purchase.reason === 'ambiguous') return message.reply(catalogMatchMessage(purchase.matches, Rpg.ITEMS, 'przedmioty'));
       if (purchase.reason === 'level') return message.reply(`Ten rynsztunek wymaga poziomu **${purchase.requiredLevel}**.`);
@@ -965,12 +998,13 @@ async function handleCommand(message, character) {
         return message.reply(`Ten przedmiot jest przeznaczony dla ${school?.name || 'innej szkoły'}.`);
       }
       if (purchase.reason === 'funds') return message.reply(`Brakuje Ci ${purchase.missing} koron.`);
+      if (purchase.reason === 'quantity') return message.reply('Ilość musi być dodatnią, bezpieczną liczbą całkowitą.');
       return message.reply('Nie ma takiego przedmiotu. Zobacz `!sklep`.');
     }
     saveData();
     return message.reply({ embeds: [createNoticeEmbed(
-      `✅ Kupiono ${purchase.item.name}`,
-      `Liczba w plecaku: **${purchase.count}**\nPozostało: **${character.coins} koron**.`
+      `✅ Kupiono ${purchase.item.name} ×${purchase.quantity}`,
+      `Liczba w plecaku: **${purchase.count}**\nKoszt: **${purchase.totalPrice} koron**\nPozostało: **${character.coins} koron**.`
     )] });
   }
 
