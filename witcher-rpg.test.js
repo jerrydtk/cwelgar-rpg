@@ -598,7 +598,11 @@ const batchStart = Date.now();
 batchAlchemist.dailyQuests = {
   startedAt: batchStart,
   resetAt: batchStart + Rpg.DAILY_QUEST_RESET,
-  tasks: [{ id: 'craft', name: 'Alchemia', target: 2, progress: 0, claimed: false }]
+  tasks: [
+    { id: 'craft', name: 'Alchemia', target: 2, progress: 0, claimed: false },
+    { id: 'mission', name: 'Kontrakt', target: 1, progress: 0, claimed: false },
+    { id: 'hunt', name: 'Wyprawa', target: 1, progress: 0, claimed: false }
+  ]
 };
 const batchMutagens = Rpg.craftItem(batchAlchemist, 'mutageny', 2, () => 0);
 assert.strictEqual(batchMutagens.ok, true);
