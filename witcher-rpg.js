@@ -1,6 +1,11 @@
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const MAX_LEVEL = 50;
+const DAILY_QUEST_RESET = 24 * HOUR;
+const DAILY_QUEST_REWARD_BASE = 50;
+const DAILY_QUEST_REWARD_PER_LEVEL = 2;
+const MAX_TOXICITY = 100;
+const TOXICITY_DECAY_PER_HOUR = 10;
 const RECENT_MISSION_LIMIT = 3;
 const HUNT_BOSS_HEALTH_MULTIPLIER = 1.65;
 const HUNT_BOSS_DAMAGE_MULTIPLIER = 1.25;
@@ -13,6 +18,13 @@ const HERBALISM_GATHER_DURATION = 15 * MINUTE;
 const HERBALISM_MAX_LEVEL = 5;
 const HERBALISM_XP_PER_HARVEST = 25;
 const HERBALISM_XP_PER_LEVEL = 100;
+const DAILY_QUEST_TEMPLATES = [
+  { id: 'mission', name: 'Kontrakt', description: 'Ukończ zwycięsko jeden kontrakt.', target: 1 },
+  { id: 'hunt', name: 'Wyprawa', description: 'Pokonaj bossa podczas wyprawy.', target: 1 },
+  { id: 'herbalism', name: 'Zielarstwo', description: 'Zakończ jedną wyprawę po zioła.', target: 1 },
+  { id: 'craft', name: 'Alchemia', description: 'Wytwórz dwa przedmioty w alchemii.', target: 2 },
+  { id: 'potion', name: 'Mikstury', description: 'Użyj dwóch mikstur lub eliksirów.', target: 2 }
+];
 
 const MISSION_MONSTER_TYPES = {
   strzyga_wyzima: 'ghule', kayran_pontar: 'utopce', ksiaze_ropuch: 'utopce', dagon_fyke: 'wraiths',
@@ -399,6 +411,7 @@ const ITEMS = {
     type: 'consumable',
     craftOnly: true,
     combatBuff: { critChance: 0.12 },
+    toxicityCost: 25,
     effectDescription: '+12% szansy na krytyk w następnej walce'
   },
   wywar_lesny: {
@@ -406,6 +419,7 @@ const ITEMS = {
     type: 'consumable',
     craftOnly: true,
     combatBuff: { attack: 5, defense: 2 },
+    toxicityCost: 35,
     effectDescription: '+5 do obrażeń i +2 obrony w następnej walce'
   },
   czarna_krew: {
@@ -413,6 +427,7 @@ const ITEMS = {
     type: 'consumable',
     craftOnly: true,
     combatBuff: { attack: 3, defense: 7 },
+    toxicityCost: 40,
     effectDescription: '+3 do obrażeń i +7 obrony w następnej walce'
   },
   biala_mewa: {
@@ -420,6 +435,7 @@ const ITEMS = {
     type: 'consumable',
     craftOnly: true,
     combatBuff: { attack: 4, critChance: 0.06 },
+    toxicityCost: 30,
     effectDescription: '+4 do obrażeń i +6% szansy na krytyk w następnej walce'
   }
 };
@@ -502,6 +518,7 @@ ITEMS.grom = {
   type: 'consumable',
   craftOnly: true,
   combatBuff: { attack: 8 },
+  toxicityCost: 50,
   effectDescription: '+8 do obrażeń w następnej walce'
 };
 ITEMS.puszczyk = {
@@ -509,6 +526,7 @@ ITEMS.puszczyk = {
   type: 'consumable',
   craftOnly: true,
   combatBuff: { critChance: 0.08, defense: 2 },
+  toxicityCost: 25,
   effectDescription: '+8% krytyka i +2 obrony w następnej walce'
 };
 ITEMS.olej_wiedzminski = {
@@ -516,6 +534,7 @@ ITEMS.olej_wiedzminski = {
   type: 'consumable',
   craftOnly: true,
   combatBuff: { attack: 4, defense: 3 },
+  toxicityCost: 30,
   effectDescription: '+4 do obrażeń i +3 obrony w następnej walce'
 };
 
@@ -759,6 +778,69 @@ function selectCombatWeapon(character, monsterType) {
   return compareWeapons(steel, silver) >= 0 ? steel : silver;
 }
 
+function regenerateToxicity(character, now = Date.now()) {
+  if (!Number.isFinite(character.toxicity)) character.toxicity = 0;
+  character.toxicity = Math.max(0, Math.min(MAX_TOXICITY, character.toxicity));
+  if (!Number.isFinite(character.lastToxicityUpdateAt)) {
+    character.lastToxicityUpdateAt = now;
+    return character.toxicity;
+  }
+
+  const elapsed = Math.max(0, now - character.lastToxicityUpdateAt);
+  character.toxicity = Math.max(0, character.toxicity - elapsed / HOUR * TOXICITY_DECAY_PER_HOUR);
+  character.lastToxicityUpdateAt = now;
+  return character.toxicity;
+}
+
+function refreshDailyQuests(character, now = Date.now(), random = Math.random) {
+  const daily = character.dailyQuests;
+  if (daily && Number.isFinite(daily.resetAt) && now < daily.resetAt &&
+      Array.isArray(daily.tasks) && daily.tasks.length === 3) {
+    return daily;
+  }
+
+  const available = [...DAILY_QUEST_TEMPLATES];
+  const tasks = [];
+  while (tasks.length < 3) {
+    const index = Math.min(available.length - 1, Math.floor(Math.max(0, random()) * available.length));
+    const [template] = available.splice(index, 1);
+    tasks.push({ ...template, progress: 0, claimed: false });
+  }
+  character.dailyQuests = {
+    startedAt: now,
+    resetAt: now + DAILY_QUEST_RESET,
+    tasks
+  };
+  return character.dailyQuests;
+}
+
+function recordDailyProgress(character, questType, amount = 1, now = Date.now()) {
+  if (!Number.isSafeInteger(amount) || amount < 1) return;
+  const daily = refreshDailyQuests(character, now);
+  for (const task of daily.tasks) {
+    if (task.id !== questType || task.claimed) continue;
+    task.progress = Math.min(task.target, task.progress + amount);
+  }
+}
+
+function getDailyQuestReward(level) {
+  const safeLevel = Number.isFinite(level) ? Math.max(1, Math.min(MAX_LEVEL, Math.floor(level))) : 1;
+  return DAILY_QUEST_REWARD_BASE + safeLevel * DAILY_QUEST_REWARD_PER_LEVEL;
+}
+
+function claimDailyQuest(character, questId, now = Date.now()) {
+  const daily = refreshDailyQuests(character, now);
+  const task = daily.tasks.find(entry => entry.id === questId);
+  if (!task) return { ok: false, reason: 'unknown' };
+  if (task.claimed) return { ok: false, reason: 'claimed', task };
+  if (task.progress < task.target) return { ok: false, reason: 'incomplete', task };
+
+  const reward = getDailyQuestReward(character.level);
+  character.coins += reward;
+  task.claimed = true;
+  return { ok: true, task, reward, coins: character.coins, resetAt: daily.resetAt };
+}
+
 function ensureCharacter(user, username, now = Date.now()) {
   const isNewCharacter = !user.witcher;
   if (isNewCharacter) {
@@ -787,6 +869,8 @@ function ensureCharacter(user, username, now = Date.now()) {
     character.level = MAX_LEVEL;
     character.xp = 0;
   }
+  if (!Number.isFinite(character.toxicity)) character.toxicity = 0;
+  if (!Number.isFinite(character.lastToxicityUpdateAt)) character.lastToxicityUpdateAt = now;
   if (!Number.isFinite(character.health)) character.health = 100;
   character.health = Math.max(0, Math.min(100, character.health));
   if (!Number.isFinite(character.lastHealthUpdateAt)) character.lastHealthUpdateAt = now;
@@ -872,6 +956,8 @@ function ensureCharacter(user, username, now = Date.now()) {
   if (character.herbalism.level >= HERBALISM_MAX_LEVEL) character.herbalism.xp = 0;
   if (!Number.isFinite(character.herbalism.lastGatherAt)) character.herbalism.lastGatherAt = null;
   if (character.activeActivity === undefined) character.activeActivity = null;
+  regenerateToxicity(character, now);
+  refreshDailyQuests(character, now);
   regenerateHealth(character, now);
   return character;
 }
@@ -1283,8 +1369,13 @@ function simulateBattle(character, activity, kind, random) {
 function completeActivity(character, now = Date.now(), random = Math.random) {
   const active = character.activeActivity;
   if (!active || now < active.finishesAt) return null;
-  if (active.kind === 'herbalism') return completeHerbGathering(character, now, random);
+  if (active.kind === 'herbalism') {
+    const result = completeHerbGathering(character, now, random);
+    recordDailyProgress(character, 'herbalism', 1, now);
+    return result;
+  }
 
+  regenerateToxicity(character, now);
   const activities = active.kind === 'mission' ? MISSIONS : HUNTS;
   const activity = activities[active.activityId];
   if (!activity) {
@@ -1293,8 +1384,11 @@ function completeActivity(character, now = Date.now(), random = Math.random) {
   }
 
   const combat = simulateBattle(character, activity, active.kind, random);
+  if (combat.victory) recordDailyProgress(character, active.kind, 1, now);
   const combatBuffUsed = character.combatBuff?.name || null;
   character.combatBuff = null;
+  character.toxicity /= 2;
+  character.lastToxicityUpdateAt = now;
   const levelAtStart = active.levelAtStart || character.level;
   const rewardMultiplier = active.kind === 'mission'
     ? 1 + Math.min(15, Math.max(0, levelAtStart - 1)) * 0.05
@@ -1368,17 +1462,23 @@ function completeActivity(character, now = Date.now(), random = Math.random) {
     levelsGained,
     level: character.level,
     unlockedHuntName,
-    combatBuffUsed
+    combatBuffUsed,
+    toxicity: character.toxicity
   };
 }
 
-function craftItem(character, recipeId, random = Math.random) {
+function craftItem(character, recipeId, quantity = 1, random = Math.random) {
+  if (typeof quantity === 'function') {
+    random = quantity;
+    quantity = 1;
+  }
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100) {
+    return { ok: false, reason: 'quantity' };
+  }
   const resolution = resolveCatalogId(recipeId, CRAFTING_RECIPES);
   if (!resolution.ok) return resolution;
   const recipe = CRAFTING_RECIPES[resolution.id];
-  const outputId = recipe.randomItems
-    ? recipe.randomItems[Math.min(recipe.randomItems.length - 1, Math.floor(Math.max(0, random()) * recipe.randomItems.length))]
-    : recipe.output;
+  const outputId = recipe.randomItems ? recipe.randomItems[0] : recipe.output;
   const item = ITEMS[outputId];
   const requiredLevel = recipe.requiredLevel || item.requiredLevel || 1;
   if (character.level < requiredLevel) return { ok: false, reason: 'level', requiredLevel };
@@ -1390,14 +1490,34 @@ function craftItem(character, recipeId, random = Math.random) {
 
   for (const [ingredientId, required] of Object.entries(recipe.ingredients)) {
     const owned = character.inventory[ingredientId] || 0;
-    if (owned < required) return { ok: false, reason: 'ingredients', ingredientId, required, owned };
+    const totalRequired = required * quantity;
+    if (!Number.isSafeInteger(totalRequired) || owned < totalRequired) {
+      return { ok: false, reason: 'ingredients', ingredientId, required: totalRequired, owned };
+    }
   }
 
   for (const [ingredientId, required] of Object.entries(recipe.ingredients)) {
-    character.inventory[ingredientId] -= required;
+    character.inventory[ingredientId] -= required * quantity;
   }
-  character.inventory[outputId] = (character.inventory[outputId] || 0) + 1;
-  return { ok: true, recipe, item, itemId: outputId, count: character.inventory[outputId] };
+  const crafted = {};
+  for (let index = 0; index < quantity; index++) {
+    const craftedId = recipe.randomItems
+      ? recipe.randomItems[Math.min(recipe.randomItems.length - 1, Math.floor(Math.max(0, random()) * recipe.randomItems.length))]
+      : outputId;
+    character.inventory[craftedId] = (character.inventory[craftedId] || 0) + 1;
+    crafted[craftedId] = (crafted[craftedId] || 0) + 1;
+  }
+  recordDailyProgress(character, 'craft', quantity);
+  const firstCraftedId = Object.keys(crafted)[0];
+  return {
+    ok: true,
+    recipe,
+    item: ITEMS[firstCraftedId],
+    itemId: firstCraftedId,
+    count: character.inventory[firstCraftedId],
+    quantity,
+    crafted
+  };
 }
 
 function buyItem(character, itemId, quantity = 1) {
@@ -1469,30 +1589,75 @@ function removeMutagen(character, itemId) {
   return { ok: true, item: ITEMS[itemId], count: equippedMutagens.length };
 }
 
-function useItem(character, itemId) {
+function useItem(character, itemId, quantity = 1, now = Date.now()) {
   const resolution = resolveCatalogId(itemId, ITEMS, ITEM_ALIASES);
   if (!resolution.ok) return resolution;
   itemId = resolution.id;
   const item = ITEMS[itemId];
   if (!item || item.type !== 'consumable') return { ok: false, reason: 'unknown' };
-  if (!character.inventory[itemId]) return { ok: false, reason: 'missing' };
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return { ok: false, reason: 'quantity' };
+  const owned = character.inventory[itemId] || 0;
+  if (owned < quantity) return { ok: false, reason: 'missing', owned };
+  regenerateToxicity(character, now);
 
   if (item.mutationBonus) return { ok: false, reason: 'equip', item };
   if (item.combatBuff) {
-    if (character.combatBuff) return { ok: false, reason: 'buff_active', buffName: character.combatBuff.name };
-    character.combatBuff = { ...item.combatBuff, name: item.name };
-    character.inventory[itemId]--;
-    return { ok: true, item, combatBuff: item.combatBuff };
+    const toxicityAdded = (item.toxicityCost || 0) * quantity;
+    if (character.toxicity + toxicityAdded > MAX_TOXICITY) {
+      return {
+        ok: false,
+        reason: 'toxicity',
+        current: character.toxicity,
+        added: toxicityAdded,
+        limit: MAX_TOXICITY
+      };
+    }
+
+    const previousBuff = character.combatBuff || {};
+    const previousItems = previousBuff.items || {};
+    const items = { ...previousItems, [itemId]: (previousItems[itemId] || 0) + quantity };
+    const buffs = Object.entries(items).map(([id, count]) =>
+      `${ITEMS[id]?.name || id}${count > 1 ? ` ×${count}` : ''}`
+    );
+    const legacyBuffName = previousBuff.items ? null : previousBuff.name;
+    const name = [legacyBuffName, ...buffs]
+      .filter(Boolean)
+      .join(' + ');
+    const combatBuff = { ...previousBuff, items, name };
+    for (const [stat, amount] of Object.entries(item.combatBuff)) {
+      combatBuff[stat] = (combatBuff[stat] || 0) + amount * quantity;
+    }
+    character.combatBuff = combatBuff;
+    character.inventory[itemId] -= quantity;
+    character.toxicity += toxicityAdded;
+    recordDailyProgress(character, 'potion', quantity, now);
+    return {
+      ok: true,
+      item,
+      quantity,
+      combatBuff,
+      toxicityAdded,
+      toxicity: character.toxicity
+    };
   }
   if (!item.heal) return { ok: false, reason: 'unknown' };
   if (character.health >= 100) return { ok: false, reason: 'healthy' };
 
-  const oldHealth = character.health;
   const school = WITCHER_SCHOOLS.find(entry => entry.id === character.school);
   const healing = Math.round(item.heal * (1 + (school?.healingBonus || 0)));
-  character.health = Math.min(100, character.health + healing);
-  character.inventory[itemId]--;
-  return { ok: true, item, healed: character.health - oldHealth, health: character.health };
+  const oldHealth = character.health;
+  const quantityUsed = Math.min(quantity, owned, Math.ceil((100 - character.health) / healing));
+  character.health = Math.min(100, character.health + healing * quantityUsed);
+  character.inventory[itemId] -= quantityUsed;
+  recordDailyProgress(character, 'potion', quantityUsed, now);
+  return {
+    ok: true,
+    item,
+    quantity: quantityUsed,
+    healed: character.health - oldHealth,
+    health: character.health,
+    toxicity: character.toxicity
+  };
 }
 
 function sellLoot(character, itemId, quantity) {
@@ -1540,6 +1705,11 @@ module.exports = {
   HUNT_PROGRESSION,
   ITEMS,
   MAX_LEVEL,
+  DAILY_QUEST_RESET,
+  DAILY_QUEST_REWARD_BASE,
+  DAILY_QUEST_REWARD_PER_LEVEL,
+  MAX_TOXICITY,
+  TOXICITY_DECAY_PER_HOUR,
   HEALTH_REGEN_PER_MINUTE,
   HERBALISM_COOLDOWN,
   HERBALISM_GATHER_DURATION,
@@ -1563,6 +1733,7 @@ module.exports = {
   MUTAGEN_SLOT_LIMIT,
   addProgress,
   buyItem,
+  claimDailyQuest,
   completeActivity,
   chooseSchool,
   craftItem,
@@ -1571,12 +1742,15 @@ module.exports = {
   equipItem,
   getMutationBonuses,
   getHuntStatus,
+  getDailyQuests: refreshDailyQuests,
+  getDailyQuestReward,
   getHerbalismStatus,
   removeMutagen,
   resolvePvPRound,
   recordPvPMatch,
   canPlayRankedPvP,
   resolveCatalogId,
+  regenerateToxicity,
   regenerateHealth,
   settlePvP,
   selectCombatWeapon,

@@ -120,6 +120,28 @@ herbalGatherer.inventory.ziola++;
 assert.strictEqual(Rpg.craftItem(herbalGatherer, Rpg.CRAFTING_RECIPES.napar_mandragory.name).ok, true);
 herbalGatherer.health = 50;
 assert.strictEqual(Rpg.useItem(herbalGatherer, Rpg.ITEMS.napar_mandragory.name).health, 95);
+const doubleHealer = selectedCharacter({ witcher: {
+  name: 'Ratownik',
+  coins: 0,
+  xp: 0,
+  level: 1,
+  health: 20,
+  inventory: { jaskolka: 2 },
+  equipment: { weapon: null, armor: null },
+  starterKitGranted: true,
+  activeActivity: null
+} });
+const doubleHeal = Rpg.useItem(doubleHealer, 'jaskolka', 2);
+assert.strictEqual(doubleHeal.quantity, 2);
+assert.strictEqual(doubleHeal.healed, 70);
+assert.strictEqual(doubleHealer.health, 90);
+assert.strictEqual(doubleHealer.inventory.jaskolka, 0);
+doubleHealer.inventory.jaskolka = 2;
+const cappedHeal = Rpg.useItem(doubleHealer, 'jaskolka', 2);
+assert.strictEqual(cappedHeal.quantity, 1);
+assert.strictEqual(cappedHeal.healed, 10);
+assert.strictEqual(doubleHealer.inventory.jaskolka, 1);
+assert.strictEqual(doubleHealer.toxicity, 0);
 assert.strictEqual(Rpg.craftItem(herbalGatherer, 'wywar_lesny').reason, 'herbalism');
 
 const masterHerbalist = selectedCharacter();
@@ -149,6 +171,8 @@ assert.strictEqual(Rpg.craftItem(masterHerbalist, 'biala_mewa').ok, true);
 for (const itemId of ['wywar_lesny', 'czarna_krew', 'biala_mewa']) {
   assert.strictEqual(Rpg.useItem(masterHerbalist, itemId).ok, true);
   masterHerbalist.combatBuff = null;
+  masterHerbalist.toxicity = 0;
+  masterHerbalist.lastToxicityUpdateAt = Date.now();
 }
 const manticoreHealer = selectedCharacter();
 manticoreHealer.school = 'mantikory';
@@ -491,6 +515,7 @@ assert.strictEqual(Rpg.useItem(alchemist, 'grom').reason, 'missing');
 const buffedTrip = Rpg.startActivity(alchemist, 'mission', 'gosciniec', 1000);
 const buffedResult = Rpg.completeActivity(alchemist, buffedTrip.finishesAt, () => 0);
 assert.strictEqual(buffedResult.combatBuffUsed, 'Eliksir Grom');
+assert.strictEqual(buffedResult.toxicity, 25);
 assert.strictEqual(alchemist.combatBuff, null);
 const plainFighter = selectedCharacter({ witcher: {
   name: 'Bez eliksiru', coins: 150, xp: 0, level: 1, health: 100, school: 'wilczej_szkoly',
@@ -505,8 +530,12 @@ alchemist.inventory.ziola = 4;
 const craftedPuszczyk = Rpg.craftItem(alchemist, 'puszczyk');
 assert.strictEqual(craftedPuszczyk.itemId, 'puszczyk');
 assert.strictEqual(Rpg.craftItem(alchemist, 'puszczyk').itemId, 'puszczyk');
-assert.strictEqual(Rpg.useItem(alchemist, 'puszczyk').ok, true);
-assert.strictEqual(Rpg.useItem(alchemist, 'puszczyk').reason, 'buff_active');
+const puszczykDose = Rpg.useItem(alchemist, 'puszczyk', 2, 1000);
+assert.strictEqual(puszczykDose.ok, true);
+assert.strictEqual(puszczykDose.combatBuff.critChance, 0.16);
+assert.strictEqual(puszczykDose.combatBuff.defense, 4);
+assert.strictEqual(puszczykDose.toxicity, 75);
+assert.strictEqual(puszczykDose.combatBuff.name, 'Eliksir Puszczyk ×2');
 assert.strictEqual(Rpg.buyItem(alchemist, 'puszczyk').reason, 'craft');
 assert.strictEqual(Rpg.CRAFTING_RECIPES.olej.output, 'olej_wiedzminski');
 alchemist.inventory.wilcza_skora = 1;
@@ -514,7 +543,41 @@ alchemist.inventory.zab_utopca = 2;
 alchemist.inventory.ruda_srebra = 1;
 const craftedOil = Rpg.craftItem(alchemist, 'olej');
 assert.strictEqual(craftedOil.itemId, 'olej_wiedzminski');
-assert.strictEqual(Rpg.useItem(alchemist, 'olej_wiedzminski').reason, 'buff_active');
+assert.strictEqual(Rpg.useItem(alchemist, 'olej_wiedzminski', 1, 1000).reason, 'toxicity');
+assert.strictEqual(alchemist.inventory.olej_wiedzminski, 1);
+const toxicDose = selectedCharacter({ witcher: {
+  name: 'Zatruty',
+  coins: 0,
+  xp: 0,
+  level: 1,
+  health: 100,
+  inventory: { puszczyk: 3 },
+  equipment: { weapon: null, armor: null },
+  starterKitGranted: true,
+  activeActivity: null
+} });
+const doseTime = Date.now();
+toxicDose.toxicity = 50;
+toxicDose.lastToxicityUpdateAt = doseTime;
+const maximumDose = Rpg.useItem(toxicDose, 'puszczyk', 2, doseTime);
+assert.strictEqual(maximumDose.toxicity, Rpg.MAX_TOXICITY);
+assert.strictEqual(Rpg.useItem(toxicDose, 'puszczyk', 1, doseTime).reason, 'toxicity');
+assert.strictEqual(toxicDose.inventory.puszczyk, 1);
+const recoveringToxicDose = Rpg.ensureCharacter({ witcher: {
+  name: 'Trzeźwiejący',
+  coins: 0,
+  xp: 0,
+  level: 1,
+  health: 100,
+  toxicity: 80,
+  lastToxicityUpdateAt: 1000,
+  lastHealthUpdateAt: 1000,
+  inventory: {},
+  equipment: { weapon: null, armor: null, steelWeapon: null, silverWeapon: null },
+  starterKitGranted: true,
+  activeActivity: { kind: 'hunt', activityId: 'bory', finishesAt: 9999999 }
+} }, undefined, 3601000);
+assert.strictEqual(recoveringToxicDose.toxicity, 70);
 const potionMaker = selectedCharacter();
 potionMaker.inventory.ziola = 2;
 potionMaker.inventory.esencja_upiora = 1;
@@ -528,6 +591,41 @@ advancedSupplies.level = 10;
 advancedSupplies.health = 1;
 assert.strictEqual(Rpg.buyItem(advancedSupplies, 'biala_rafard').ok, true);
 assert.strictEqual(Rpg.useItem(advancedSupplies, 'biala_rafard').health, 100);
+
+const batchAlchemist = selectedCharacter();
+batchAlchemist.inventory.mutagen = 6;
+const batchStart = Date.now();
+batchAlchemist.dailyQuests = {
+  startedAt: batchStart,
+  resetAt: batchStart + Rpg.DAILY_QUEST_RESET,
+  tasks: [{ id: 'craft', name: 'Alchemia', target: 2, progress: 0, claimed: false }]
+};
+const batchMutagens = Rpg.craftItem(batchAlchemist, 'mutageny', 2, () => 0);
+assert.strictEqual(batchMutagens.ok, true);
+assert.strictEqual(batchMutagens.quantity, 2);
+assert.deepStrictEqual(batchMutagens.crafted, { mutagen_czerwony_1: 2 });
+assert.strictEqual(batchAlchemist.inventory.mutagen, 0);
+assert.strictEqual(batchAlchemist.dailyQuests.tasks[0].progress, 2);
+batchAlchemist.inventory.mutagen = 5;
+assert.strictEqual(Rpg.craftItem(batchAlchemist, 'mutageny', 2).reason, 'ingredients');
+assert.strictEqual(batchAlchemist.inventory.mutagen, 5);
+assert.strictEqual(Rpg.craftItem(batchAlchemist, 'mutageny', 101).reason, 'quantity');
+
+const dailyCharacter = selectedCharacter();
+dailyCharacter.dailyQuests = null;
+const dailyStart = 10000;
+const dailyBoard = Rpg.getDailyQuests(dailyCharacter, dailyStart, () => 0);
+assert.deepStrictEqual(dailyBoard.tasks.map(task => task.id), ['mission', 'hunt', 'herbalism']);
+dailyBoard.tasks[0].progress = dailyBoard.tasks[0].target;
+dailyCharacter.level = 10;
+const dailyClaim = Rpg.claimDailyQuest(dailyCharacter, 'mission', dailyStart + 1);
+assert.strictEqual(dailyClaim.ok, true);
+assert.strictEqual(dailyClaim.reward, 70);
+assert.strictEqual(Rpg.claimDailyQuest(dailyCharacter, 'mission', dailyStart + 2).reason, 'claimed');
+const nextDailyBoard = Rpg.getDailyQuests(dailyCharacter, dailyStart + Rpg.DAILY_QUEST_RESET, () => 0.99);
+assert.strictEqual(nextDailyBoard.startedAt, dailyStart + Rpg.DAILY_QUEST_RESET);
+assert.strictEqual(nextDailyBoard.tasks.every(task => task.progress === 0 && !task.claimed), true);
+assert.strictEqual(Rpg.claimDailyQuest(dailyCharacter, 'unknown', dailyStart + Rpg.DAILY_QUEST_RESET).reason, 'unknown');
 
 const started = Rpg.startActivity(first, 'mission', 'gosciniec', 1000);
 assert.strictEqual(started.ok, true);
