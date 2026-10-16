@@ -103,6 +103,12 @@ const MISSION_DROPS = {
   straznik_portalu: { id: 'rdzen_portalu', name: 'Rdzeń strażnika portalu', price: 70 }
 };
 
+const MISSION_MUTAGEN_DROPS = new Set([
+  'strzyga_wyzima',
+  'dettlaff_toussaint',
+  'straznik_portalu'
+]);
+
 function createMission(id, name, monsterType, minutes, minGold, maxGold, xp, damage, trophyChance, levelRecommendation) {
   const trophy = MISSION_TROPHIES[monsterType] || MISSION_TROPHIES.nekkerzy;
   const uniqueDrop = MISSION_DROPS[id];
@@ -117,7 +123,7 @@ function createMission(id, name, monsterType, minutes, minGold, maxGold, xp, dam
     maxGold,
     xp,
     lootChance: 0.2,
-    loot: [uniqueDrop.id],
+    loot: [uniqueDrop.id, ...(MISSION_MUTAGEN_DROPS.has(id) ? ['mutagen'] : [])],
     damage,
     minMonsters,
     maxMonsters: minMonsters + 1,
@@ -490,18 +496,18 @@ const MUTAGEN_VARIANTS = [
   ['mutagen_czerwony_1', 'Mutagen czerwony I', { attack: 1 }],
   ['mutagen_czerwony_2', 'Mutagen czerwony II', { attack: 2 }],
   ['mutagen_czerwony_3', 'Mutagen czerwony III', { attack: 3 }],
-  ['mutagen_czerwony_4', 'Mutagen czerwony IV', { attack: 2, critChance: 0.01 }],
-  ['mutagen_czerwony_5', 'Mutagen czerwony V', { attack: 1, defense: 1 }],
+  ['mutagen_czerwony_4', 'Mutagen czerwony IV', { attack: 3, critChance: 0.01 }],
+  ['mutagen_czerwony_5', 'Mutagen czerwony V', { attack: 5, defense: 1,critChance: 0.01 }],
   ['mutagen_zielony_1', 'Mutagen zielony I', { defense: 1 }],
   ['mutagen_zielony_2', 'Mutagen zielony II', { defense: 2 }],
   ['mutagen_zielony_3', 'Mutagen zielony III', { defense: 3 }],
-  ['mutagen_zielony_4', 'Mutagen zielony IV', { defense: 2, attack: 1 }],
-  ['mutagen_zielony_5', 'Mutagen zielony V', { defense: 1, critChance: 0.01 }],
+  ['mutagen_zielony_4', 'Mutagen zielony IV', { defense: 4, attack: 1 }],
+  ['mutagen_zielony_5', 'Mutagen zielony V', { defense: 5, critChance: 0.01, attack: 1 }],
   ['mutagen_niebieski_1', 'Mutagen niebieski I', { critChance: 0.01 }],
   ['mutagen_niebieski_2', 'Mutagen niebieski II', { critChance: 0.02 }],
   ['mutagen_niebieski_3', 'Mutagen niebieski III', { critChance: 0.03 }],
-  ['mutagen_niebieski_4', 'Mutagen niebieski IV', { attack: 1, critChance: 0.01 }],
-  ['mutagen_niebieski_5', 'Mutagen niebieski V', { defense: 1, critChance: 0.01 }]
+  ['mutagen_niebieski_4', 'Mutagen niebieski IV', { attack: 2, critChance: 0.04 }],
+  ['mutagen_niebieski_5', 'Mutagen niebieski V', { defense: 2, critChance: 0.05, attack: 2 }]
 ];
 const RANDOM_MUTAGEN_IDS = MUTAGEN_VARIANTS.map(([id, name, mutationBonus]) => {
   ITEMS[id] = { name, type: 'consumable', mutationBonus, craftOnly: true };
@@ -1328,9 +1334,7 @@ function simulateBattle(character, activity, kind, random) {
     enemyHealth = Math.max(0, enemyHealth - playerDamage);
     damageDealt += playerDamage;
 
-    if (rounds <= 5) {
-      combatLog.push(`${character.name} ${critical ? 'zadaje cios krytyczny' : 'uderza'} ${monsterName} za **${playerDamage}** obrażeń (${enemyHealth}/${enemyMaxHealth} PŻ potwora).`);
-    }
+    combatLog.push(`${rounds}. ${character.name} ${critical ? 'zadaje cios krytyczny' : 'uderza'} ${monsterName} za **${playerDamage}** obrażeń (${enemyHealth}/${enemyMaxHealth} PŻ potwora).`);
     if (enemyHealth <= 0) break;
 
     const defense = (armor?.defense || 0) + (school?.defense || 0) +
@@ -1345,14 +1349,12 @@ function simulateBattle(character, activity, kind, random) {
     ));
     playerHealth = Math.max(0, playerHealth - scaledIncomingDamage);
     damageTaken += scaledIncomingDamage;
-    if (rounds <= 5) combatLog.push(`${monsterName} kontratakuje za **${scaledIncomingDamage}** obrażeń (${playerHealth}/100 PŻ wiedźmina).`);
+    combatLog.push(`${rounds}. ${monsterName} kontratakuje za **${scaledIncomingDamage}** obrażeń (${Math.round(playerHealth)}/100 PŻ wiedźmina).`);
   }
 
   const victory = enemyHealth <= 0;
   const monstersDefeated = victory ? monstersEncountered : 0;
   character.health = playerHealth;
-  if (rounds > 5) combatLog.push(`Walka trwała ${rounds} rund. ${victory ? 'Potwór został pokonany.' : 'Wiedźmin nie zdołał pokonać potwora.'}`);
-
   return {
     victory,
     monsterType,
